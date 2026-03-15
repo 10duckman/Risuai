@@ -1581,7 +1581,11 @@ export async function fetchNative(url: string, arg: {
     }
     else if (throughProxy) {
 
-        const r = await fetch(hubURL + `/proxy2`, {
+        const proxyEndpoint = (isNodeServer && DBState?.db?.gatewayMode)
+            ? `/gateway/proxy`
+            : hubURL + `/proxy2`;
+
+        const r = await fetch(proxyEndpoint, {
             body: realBody as any,
             headers: arg.useRisuTk ? {
                 "risu-header": encodeURIComponent(JSON.stringify(headers)),

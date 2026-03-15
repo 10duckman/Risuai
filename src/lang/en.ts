@@ -1417,6 +1417,7 @@ export const languageEnglish = {
     claudeBatching: "Claude Batching",
     claude1HourCaching: "Claude 1 Hour Caching",
     bedrockEndpointMode: "Bedrock Endpoint Mode",
+    gatewayMode: "Gateway Mode (Route all requests through server)",
     folderNameInput: "Please input the new folder name",
     folderRemoveLengthError: "To remove a folder, it must not contain any entries.",
     personaNote: "Persona Note",

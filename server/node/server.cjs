@@ -458,6 +458,78 @@ app.post('/proxy', reverseProxyFunc);
 app.post('/proxy2', reverseProxyFunc);
 app.post('/hub-proxy/*', hubProxyFunc);
 
+// Gateway proxy — forwards requests with SSE heartbeat
+app.options('/gateway/proxy', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth, risu-url, risu-header');
+    res.status(204).end();
+});
+app.post('/gateway/proxy', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (!await checkAuth(req, res)) {
+        return;
+    }
+
+    const urlParam = req.headers['risu-url'] ? decodeURIComponent(req.headers['risu-url']) : null;
+    if (!urlParam) {
+        res.status(400).json({ error: 'URL has no param' });
+        return;
+    }
+
+    const header = req.headers['risu-header'] ? JSON.parse(decodeURIComponent(req.headers['risu-header'])) : {};
+    if (!header['x-forwarded-for']) {
+        header['x-forwarded-for'] = req.ip;
+    }
+
+    // SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    // Heartbeat to prevent iOS WebKit 60s timeout
+    const heartbeat = setInterval(() => {
+        res.write(':heartbeat\n\n');
+    }, 15000);
+
+    req.on('close', () => {
+        clearInterval(heartbeat);
+    });
+
+    try {
+        const originalResponse = await fetch(urlParam, {
+            method: req.method,
+            headers: header,
+            body: JSON.stringify(req.body)
+        });
+
+        if (!originalResponse.ok) {
+            clearInterval(heartbeat);
+            res.write(`data: ${JSON.stringify({ type: 'error', error: { message: `HTTP ${originalResponse.status}` } })}\n\n`);
+            res.end();
+            return;
+        }
+
+        // Pipe LLM response through, heartbeat keeps connection alive
+        for await (const chunk of originalResponse.body) {
+            res.write(chunk);
+        }
+
+        clearInterval(heartbeat);
+        res.end();
+    } catch (err) {
+        console.error('[Gateway] Proxy error:', err.message || err);
+        clearInterval(heartbeat);
+        if (res.headersSent) {
+            res.write(`data: ${JSON.stringify({ type: 'error', error: { message: err.message || 'Gateway proxy error' } })}\n\n`);
+            res.end();
+        } else {
+            res.status(500).json({ error: err.message || 'Gateway proxy error' });
+        }
+    }
+});
+
 // Bedrock ConverseStream gateway
 app.options('/gateway/bedrock-stream', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');

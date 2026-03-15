@@ -386,7 +386,6 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
     const bedrock = arg.modelInfo.format === LLMFormat.AWSBedrockClaude
 
     if(bedrock && aiModel !== 'reverse_proxy'){
-
         // ConverseStream mode: route through server gateway
         if(db.bedrockEndpointMode === 'converse-stream'){
             // Apply us./global. prefix same as invoke mode
@@ -517,17 +516,22 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             }
         }
 
-        // Invoke mode: existing code (unchanged)
-        function getCredentialParts(key:string) {
-            const [accessKeyId, secretAccessKey, region] = key.split(":");
+        // Invoke mode
+        const isBearerToken = !apiKey.includes(':')
 
-            if (!accessKeyId || !secretAccessKey || !region) {
-              throw new Error("The key assigned to this request is invalid.");
+        let region = 'us-east-1'
+        let accessKeyId = ''
+        let secretAccessKey = ''
+
+        if (!isBearerToken) {
+            const parts = apiKey.split(":");
+            if (!parts[0] || !parts[1] || !parts[2]) {
+                throw new Error("The key assigned to this request is invalid.");
             }
-
-            return { accessKeyId, secretAccessKey, region };
+            accessKeyId = parts[0]
+            secretAccessKey = parts[1]
+            region = parts[2]
         }
-        const { accessKeyId, secretAccessKey, region } = getCredentialParts(apiKey);
 
         const AMZ_HOST = "bedrock-runtime.%REGION%.amazonaws.com";
         const host = AMZ_HOST.replace("%REGION%", region);
@@ -563,27 +567,42 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             delete params.top_p
         }
 
-        const rq = new HttpRequest({
-            method: "POST",
-            protocol: "https:",
-            hostname: host,
-            path: `/model/${awsModel}/invoke${stream ? "-with-response-stream" : ""}`,
-            headers: {
-              ["Host"]: host,
-              ["Content-Type"]: "application/json",
-              ["accept"]: "application/json",
-            },
-            body: JSON.stringify(params),
-        });
+        let signed: { headers: Record<string, string> }
 
-        const signer = new SignatureV4({
-            sha256: Sha256,
-            credentials: { accessKeyId, secretAccessKey },
-            region,
-            service: "bedrock",
-        });
+        if (isBearerToken) {
+            // Bearer token (Bedrock API Key) — no SigV4, use Authorization header
+            signed = {
+                headers: {
+                    "Host": host,
+                    "Content-Type": "application/json",
+                    "accept": "application/json",
+                    "Authorization": `Bearer ${apiKey}`,
+                }
+            }
+        } else {
+            // SigV4 signing (accessKey:secretKey:region)
+            const rq = new HttpRequest({
+                method: "POST",
+                protocol: "https:",
+                hostname: host,
+                path: `/model/${awsModel}/invoke${stream ? "-with-response-stream" : ""}`,
+                headers: {
+                  ["Host"]: host,
+                  ["Content-Type"]: "application/json",
+                  ["accept"]: "application/json",
+                },
+                body: JSON.stringify(params),
+            });
 
-        const signed = await signer.sign(rq);
+            const signer = new SignatureV4({
+                sha256: Sha256,
+                credentials: { accessKeyId, secretAccessKey },
+                region,
+                service: "bedrock",
+            });
+
+            signed = await signer.sign(rq);
+        }
 
         if(arg.previewBody){
             return {
