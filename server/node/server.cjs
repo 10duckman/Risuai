@@ -458,6 +458,142 @@ app.post('/proxy', reverseProxyFunc);
 app.post('/proxy2', reverseProxyFunc);
 app.post('/hub-proxy/*', hubProxyFunc);
 
+// Bedrock ConverseStream gateway
+app.options('/gateway/bedrock-stream', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth');
+    res.status(204).end();
+});
+app.post('/gateway/bedrock-stream', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (!await checkAuth(req, res)) {
+        return;
+    }
+
+    try {
+        const { modelId, messages, system, inferenceConfig, bearerToken: clientBearerToken } = req.body;
+
+        if (!modelId) {
+            res.status(400).json({ error: 'modelId is required' });
+            return;
+        }
+
+        const { BedrockRuntimeClient, ConverseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
+
+        const apiKey = clientBearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || '';
+        const envRegion = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
+
+        let clientConfig = { region: envRegion };
+
+        // Detect credential format
+        if (apiKey.includes(':')) {
+            // Format: accessKeyId:secretAccessKey:region
+            const parts = apiKey.split(':');
+            if (parts.length >= 3) {
+                clientConfig.region = parts[2];
+                clientConfig.credentials = {
+                    accessKeyId: parts[0],
+                    secretAccessKey: parts[1],
+                };
+            }
+        } else if (apiKey) {
+            // Bearer token format
+            clientConfig.token = { token: apiKey };
+        }
+        // else: fall back to AWS SDK default credential chain (env vars, profile, etc.)
+
+        const client = new BedrockRuntimeClient(clientConfig);
+
+        console.log(`[Gateway] Bedrock request: modelId=${modelId}, region=${clientConfig.region}`);
+
+        const command = new ConverseStreamCommand({
+            modelId,
+            messages,
+            system: system ? [{ text: system }] : undefined,
+            inferenceConfig,
+        });
+
+        // SSE headers
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+
+        // Heartbeat to prevent iOS WebKit 60s timeout
+        const heartbeat = setInterval(() => {
+            res.write(':heartbeat\n\n');
+        }, 15000);
+
+        // Handle client disconnect
+        req.on('close', () => {
+            clearInterval(heartbeat);
+        });
+
+        const response = await client.send(command);
+
+        let thinking = false;
+        for await (const event of response.stream) {
+            if (event.contentBlockStart) {
+                const block = event.contentBlockStart.start;
+                if (block?.toolUse) {
+                    // tool use block — pass as-is
+                    res.write(`data: ${JSON.stringify({
+                        type: 'content_block_start',
+                        content_block: { type: 'tool_use', id: block.toolUse.toolUseId, name: block.toolUse.name }
+                    })}\n\n`);
+                }
+            } else if (event.contentBlockDelta) {
+                const delta = event.contentBlockDelta.delta;
+                if (delta?.text) {
+                    // Text delta — emit as Anthropic SSE format
+                    res.write(`data: ${JSON.stringify({
+                        type: 'content_block_delta',
+                        delta: { type: 'text_delta', text: delta.text }
+                    })}\n\n`);
+                } else if (delta?.reasoningContent?.text) {
+                    // Thinking delta
+                    res.write(`data: ${JSON.stringify({
+                        type: 'content_block_delta',
+                        delta: { type: 'thinking_delta', thinking: delta.reasoningContent.text }
+                    })}\n\n`);
+                } else if (delta?.toolUse) {
+                    // Tool use delta
+                    res.write(`data: ${JSON.stringify({
+                        type: 'content_block_delta',
+                        delta: { type: 'input_json_delta', partial_json: delta.toolUse.input }
+                    })}\n\n`);
+                }
+            } else if (event.messageStop) {
+                res.write(`data: ${JSON.stringify({
+                    type: 'message_stop'
+                })}\n\n`);
+            } else if (event.metadata) {
+                // Usage info
+                res.write(`data: ${JSON.stringify({
+                    type: 'message_delta',
+                    usage: event.metadata.usage
+                })}\n\n`);
+            }
+        }
+
+        clearInterval(heartbeat);
+        res.end();
+    } catch (err) {
+        console.error(`[Gateway] Bedrock error:`, err.message || err);
+        // If headers already sent, send error via SSE
+        if (res.headersSent) {
+            res.write(`data: ${JSON.stringify({
+                type: 'error',
+                error: { message: err.message || 'Bedrock ConverseStream error' }
+            })}\n\n`);
+            res.end();
+        } else {
+            res.status(500).json({ error: err.message || 'Bedrock ConverseStream error' });
+        }
+    }
+});
+
 // app.get('/api/password', async(req, res)=> {
 //     if(password === ''){
 //         res.send({status: 'unset'})

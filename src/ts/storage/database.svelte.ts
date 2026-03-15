@@ -641,6 +641,7 @@ export function setDatabase(data:Database){
     data.hamburgerButtonBottom ??= false
     data.dynamicModelRegistry ??= true
     data.saveSignatures ??= false
+    data.bedrockEndpointMode ??= 'invoke'
     // If the user uses plugins, its probably better to enable RisuAI Pro Tools by default
     // Because its likely they are power users who would benefit from the features
     data.enableRisuaiProTools ??= data.plugins.length > 0
@@ -1114,6 +1115,7 @@ export interface Database{
     promptTextInfoInsideChat:boolean
     claudeBatching:boolean
     claude1HourCaching:boolean
+    bedrockEndpointMode:'invoke'|'converse-stream'
     rememberToolUsage:boolean
     simplifiedToolUse:boolean
     requestLocation:string

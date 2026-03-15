@@ -386,13 +386,145 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
     const bedrock = arg.modelInfo.format === LLMFormat.AWSBedrockClaude
 
     if(bedrock && aiModel !== 'reverse_proxy'){
+
+        // ConverseStream mode: route through server gateway
+        if(db.bedrockEndpointMode === 'converse-stream'){
+            // Apply us./global. prefix same as invoke mode
+            let useGlobal = false
+            const rawModelId = arg.modelInfo.internalID
+            const datePart = Number(rawModelId.match(/(\d{8})/)?.[0])
+            const versionMatch = rawModelId.match(/claude-(?:opus-|sonnet-|haiku-)?(\d+)-(\d+)/)
+            if (datePart && !isNaN(datePart)) {
+                useGlobal = datePart >= 20250929
+            } else if (versionMatch) {
+                const majorVersion = Number(versionMatch[1])
+                const minorVersion = Number(versionMatch[2])
+                useGlobal = (majorVersion > 4) || (majorVersion === 4 && minorVersion >= 5)
+            }
+            const modelId = (useGlobal ? 'global.' : 'us.') + rawModelId
+
+            // Convert Anthropic message format to Bedrock Converse format
+            const converseMessages = body.messages?.map((msg: any) => ({
+                role: msg.role,
+                content: typeof msg.content === 'string'
+                    ? [{ text: msg.content }]
+                    : msg.content?.map((c: any) => {
+                        if (c.type === 'text') return { text: c.text }
+                        if (c.type === 'image') return { image: { format: 'png', source: { bytes: c.source?.data } } }
+                        return { text: c.text || '' }
+                    })
+            })) || []
+
+            const systemText = typeof body.system === 'string'
+                ? body.system
+                : body.system?.map((s: any) => s.text).join('\n') || ''
+
+            const gatewayBody = {
+                modelId,
+                messages: converseMessages,
+                system: systemText || undefined,
+                inferenceConfig: {
+                    maxTokens: body.max_tokens,
+                    temperature: body.temperature,
+                    topP: body.top_p,
+                },
+                bearerToken: apiKey,
+            }
+
+            if (body.thinking?.type === "enabled" || body.thinking?.type === "adaptive") {
+                gatewayBody.inferenceConfig.temperature = 1.0
+            }
+
+            // Direct fetch to server gateway endpoint
+            // Use NodeStorage.createAuth() for JWT authentication
+            const { NodeStorage } = await import('src/ts/storage/nodeStorage')
+            const nodeStorage = new NodeStorage()
+            const gatewayHeaders:{[key:string]:string} = {
+                'Content-Type': 'application/json',
+                'risu-auth': await nodeStorage.createAuth(),
+            }
+
+            const res = await fetch('/gateway/bedrock-stream', {
+                method: 'POST',
+                headers: gatewayHeaders,
+                body: JSON.stringify(gatewayBody),
+                signal: arg.abortSignal,
+            })
+
+            if(res.status !== 200){
+                return {
+                    type: 'fail',
+                    result: await res.text()
+                }
+            }
+
+            // SSE parser — same logic as requestClaudeHTTP but inline
+            let thinking = false
+            const stream = new ReadableStream<StreamResponseChunk>({
+                async start(controller){
+                    let text = ''
+                    const reader = res.body.getReader()
+                    let buffer = ''
+                    const decoder = new TextDecoder()
+
+                    while(true){
+                        if(arg?.abortSignal?.aborted) break
+                        const {done, value} = await reader.read()
+                        if(done) break
+
+                        buffer += decoder.decode(value, {stream: true})
+
+                        // Process complete lines only
+                        let newlineIdx
+                        while((newlineIdx = buffer.indexOf('\n')) !== -1){
+                            const line = buffer.slice(0, newlineIdx)
+                            buffer = buffer.slice(newlineIdx + 1)
+
+                            if(line.startsWith('data: ')){
+                                try {
+                                    const parsed = JSON.parse(line.slice(6))
+                                    if(parsed?.type === 'content_block_delta'){
+                                        if(parsed?.delta?.type === 'text_delta'){
+                                            if(thinking){ text += "</Thoughts>\n\n"; thinking = false }
+                                            text += parsed.delta?.text ?? ''
+                                        }
+                                        if(parsed?.delta?.type === 'thinking_delta'){
+                                            if(!thinking){ text += "<Thoughts>\n"; thinking = true }
+                                            text += parsed.delta?.thinking ?? ''
+                                        }
+                                    }
+                                    if(parsed?.type === 'error'){
+                                        text += "Error:" + parsed?.error?.message
+                                    }
+                                } catch(e) {}
+                            }
+                        }
+
+                        if(text){
+                            controller.enqueue({"0": text})
+                        }
+                    }
+
+                    if(thinking){ text += "</Thoughts>\n\n" }
+                    if(text) controller.enqueue({"0": text})
+                    controller.close()
+                }
+            })
+
+            return {
+                type: 'streaming',
+                result: stream
+            }
+        }
+
+        // Invoke mode: existing code (unchanged)
         function getCredentialParts(key:string) {
             const [accessKeyId, secretAccessKey, region] = key.split(":");
-          
+
             if (!accessKeyId || !secretAccessKey || !region) {
               throw new Error("The key assigned to this request is invalid.");
             }
-          
+
             return { accessKeyId, secretAccessKey, region };
         }
         const { accessKeyId, secretAccessKey, region } = getCredentialParts(apiKey);
@@ -403,7 +535,7 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
 
         // https://docs.claude.com/en/api/claude-on-amazon-bedrock#global-vs-regional-endpoints
         let useGlobal = false;
-        
+
         const datePart = Number(arg.modelInfo.internalID.match(/(\d{8})/)?.[0]);
         const versionMatch = arg.modelInfo.internalID.match(/claude-(?:opus-|sonnet-|haiku-)?(\d+)-(\d+)/);
 
@@ -415,8 +547,8 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             useGlobal = (majorVersion > 4) || (majorVersion === 4 && minorVersion >= 5);
         }
 
-        const awsModel = useGlobal 
-            ? "global." + arg.modelInfo.internalID 
+        const awsModel = useGlobal
+            ? "global." + arg.modelInfo.internalID
             : "us." + arg.modelInfo.internalID;
 
         const url = `https://${host}/model/${awsModel}/invoke${stream ? "-with-response-stream" : ""}`
@@ -443,14 +575,14 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             },
             body: JSON.stringify(params),
         });
-        
+
         const signer = new SignatureV4({
             sha256: Sha256,
             credentials: { accessKeyId, secretAccessKey },
             region,
             service: "bedrock",
         });
-        
+
         const signed = await signer.sign(rq);
 
         if(arg.previewBody){
@@ -518,8 +650,8 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
                 resText += '\n{{redacted_thinking}}\n'
             }
         }
-    
-    
+
+
         if(arg.extractJson && db.jsonSchemaEnabled){
             return {
                 type: 'success',

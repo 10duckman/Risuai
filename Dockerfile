@@ -15,14 +15,15 @@ RUN corepack install --global pnpm@latest
 
 FROM base AS deps
 # Install only prod deps
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --no-frozen-lockfile
 
 # ------------------------------------------------------------------------------------------
 
 FROM deps AS builder
 COPY . .
 # Install including dev deps
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --no-frozen-lockfile
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm build
 
 # ------------------------------------------------------------------------------------------

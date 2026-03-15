@@ -157,6 +157,12 @@ export const advancedSettingsItems: SettingItem[] = [
     { id: 'adv.antiOverload', type: 'check', labelKey: 'antiServerOverload', bindKey: 'antiServerOverloads', classes: 'mt-4' },
     { id: 'adv.claudeCache', type: 'check', labelKey: 'claude1HourCaching', bindKey: 'claude1HourCaching', classes: 'mt-4' },
     { id: 'adv.claudeBatch', type: 'check', labelKey: 'claudeBatching', bindKey: 'claudeBatching', showExperimental: true, classes: 'mt-4' },
+    { id: 'adv.bedrockMode', type: 'select', labelKey: 'bedrockEndpointMode', bindKey: 'bedrockEndpointMode', showExperimental: true, classes: 'mt-4', options: {
+        selectOptions: [
+            { value: 'invoke', label: 'Invoke (Default)' },
+            { value: 'converse-stream', label: 'ConverseStream (Server Gateway)' },
+        ]
+    }},
     { id: 'adv.personaNote', type: 'check', labelKey: 'personaNote', bindKey: 'personaNote', showExperimental: true, classes: 'mt-4' },
     { id: 'adv.toolUsage', type: 'check', labelKey: 'rememberToolUsage', bindKey: 'rememberToolUsage', classes: 'mt-4' },
     { id: 'adv.bookmark', type: 'check', labelKey: 'bookmark', bindKey: 'enableBookmark', classes: 'mt-4' },
