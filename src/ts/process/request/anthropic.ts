@@ -403,16 +403,21 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             const modelId = (useGlobal ? 'global.' : 'us.') + rawModelId
 
             // Convert Anthropic message format to Bedrock Converse format
-            const converseMessages = body.messages?.map((msg: any) => ({
-                role: msg.role,
-                content: typeof msg.content === 'string'
+            const cacheTtl = db.claude1HourCaching ? '1h' : '5m'
+            const converseMessages = body.messages?.map((msg: any) => {
+                const hasCacheControl = msg.content?.some?.((c: any) => c.cache_control)
+                const content = typeof msg.content === 'string'
                     ? [{ text: msg.content }]
                     : msg.content?.map((c: any) => {
                         if (c.type === 'text') return { text: c.text }
                         if (c.type === 'image') return { image: { format: 'png', source: { bytes: c.source?.data } } }
-                        return { text: c.text || '' }
-                    })
-            })) || []
+                        return null
+                    }).filter(Boolean)
+                if (hasCacheControl && content?.length > 0) {
+                    content.push({ cachePoint: { type: 'default', ttl: cacheTtl } })
+                }
+                return { role: msg.role, content }
+            }) || []
 
             const systemText = typeof body.system === 'string'
                 ? body.system
@@ -442,6 +447,10 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
                 'Content-Type': 'application/json',
                 'risu-auth': await nodeStorage.createAuth(),
             }
+            if(arg.chatId){
+                gatewayHeaders['x-chat-id'] = arg.chatId
+            }
+            gatewayHeaders['x-cache-ttl'] = db.claude1HourCaching ? '1h' : '5m'
 
             const res = await fetch('/gateway/bedrock-stream', {
                 method: 'POST',
@@ -462,6 +471,7 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             const stream = new ReadableStream<StreamResponseChunk>({
                 async start(controller){
                     let text = ''
+                    let expectedLength = -1
                     const reader = res.body.getReader()
                     let buffer = ''
                     const decoder = new TextDecoder()
@@ -492,6 +502,9 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
                                             text += parsed.delta?.thinking ?? ''
                                         }
                                     }
+                                    if(parsed?.type === 'message_delta' && parsed?.responseLength != null){
+                                        expectedLength = parsed.responseLength
+                                    }
                                     if(parsed?.type === 'error'){
                                         text += "Error:" + parsed?.error?.message
                                     }
@@ -505,7 +518,7 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
                     }
 
                     if(thinking){ text += "</Thoughts>\n\n" }
-                    if(text) controller.enqueue({"0": text})
+                    if(text) controller.enqueue({"0": text, "__expectedLength": String(expectedLength)})
                     controller.close()
                 }
             })

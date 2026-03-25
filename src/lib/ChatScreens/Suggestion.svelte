@@ -85,9 +85,29 @@
                 formated: promptbody,
                 bias: {},
                 currentChar : currentChar as character
-            }, 'submodel', abortController.signal).then(rq2=>{
-                if(rq2.type !== 'fail' && rq2.type !== 'streaming' && rq2.type !== 'multiline' && progress){
-                    var suggestMessagesNew = rq2.result.split('\n').filter(msg => msg.startsWith('-')).map(msg => msg.replace('-','').trim())
+            }, 'submodel', abortController.signal).then(async (rq2)=>{
+                if(rq2.type === 'fail' || !progress){
+                    progress = false
+                    return
+                }
+                let resultText = ''
+                if(rq2.type === 'streaming'){
+                    const reader = rq2.result.getReader()
+                    let lastChunk:{[key:string]:string} = {}
+                    while(true){
+                        const {done, value} = await reader.read()
+                        if(value) lastChunk = value
+                        if(done) break
+                    }
+                    const firstKey = Object.keys(lastChunk)[0]
+                    resultText = firstKey ? lastChunk[firstKey] : ''
+                } else if(rq2.type === 'multiline'){
+                    resultText = rq2.result.map(r => r[1]).join('\n')
+                } else {
+                    resultText = rq2.result
+                }
+                if(resultText){
+                    var suggestMessagesNew = resultText.split('\n').filter(msg => msg.startsWith('-')).map(msg => msg.replace('-','').trim())
                     const db:Database = DBState.db;
                     db.characters[$selectedCharID].chats[currentChar.chatPage].suggestMessages = suggestMessagesNew
                     setDatabase(db)

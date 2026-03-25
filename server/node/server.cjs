@@ -534,7 +534,7 @@ app.post('/gateway/proxy', async (req, res) => {
 app.options('/gateway/bedrock-stream', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth, x-chat-id, x-cache-ttl');
     res.status(204).end();
 });
 app.post('/gateway/bedrock-stream', async (req, res) => {
@@ -577,12 +577,41 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
 
         const client = new BedrockRuntimeClient(clientConfig);
 
-        console.log(`[Gateway] Bedrock request: modelId=${modelId}, region=${clientConfig.region}`);
+        const chatId = req.headers['x-chat-id'] || '';
+        console.log(`[Gateway] Bedrock request: modelId=${modelId}, region=${clientConfig.region}${chatId ? ', chatId=' + chatId : ''}`);
+
+        // Gateway logging (GATEWAY_LOG=true to enable)
+        const gatewayLog = process.env.GATEWAY_LOG === 'true';
+        let logId = '';
+        if (gatewayLog) {
+            logId = `${Date.now()}_${modelId.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+            const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
+            if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+            const reqLog = { modelId, system: system ? `${system.length} chars` : null, messages: messages?.length + ' messages', inferenceConfig, chatId, timestamp: new Date().toISOString() };
+            const fullReqLog = { modelId, system, messages, inferenceConfig, chatId, timestamp: new Date().toISOString() };
+            fs.writeFile(path.join(logDir, `${logId}_req.json`), JSON.stringify(fullReqLog, null, 2)).catch(() => {});
+            console.log(`[Gateway] Log: ${logId}`, JSON.stringify(reqLog));
+        }
+
+        const cacheTtl = req.headers['x-cache-ttl'] || '5m';
+
+        // Trim trailing whitespace from assistant messages (Bedrock rejects it)
+        if (messages) {
+            for (const m of messages) {
+                if (m.role === 'assistant' && Array.isArray(m.content)) {
+                    for (const b of m.content) {
+                        if (b.text && typeof b.text === 'string') {
+                            b.text = b.text.trimEnd();
+                        }
+                    }
+                }
+            }
+        }
 
         const command = new ConverseStreamCommand({
             modelId,
             messages,
-            system: system ? [{ text: system }] : undefined,
+            system: system ? [{ text: system }, { cachePoint: { type: "default", ttl: cacheTtl } }] : undefined,
             inferenceConfig,
         });
 
@@ -605,6 +634,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         const response = await client.send(command);
 
         let thinking = false;
+        let responseText = '';
         for await (const event of response.stream) {
             if (event.contentBlockStart) {
                 const block = event.contentBlockStart.start;
@@ -618,6 +648,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             } else if (event.contentBlockDelta) {
                 const delta = event.contentBlockDelta.delta;
                 if (delta?.text) {
+                    responseText += delta.text;
                     // Text delta — emit as Anthropic SSE format
                     res.write(`data: ${JSON.stringify({
                         type: 'content_block_delta',
@@ -641,10 +672,17 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
                     type: 'message_stop'
                 })}\n\n`);
             } else if (event.metadata) {
-                // Usage info
+                // Usage info + cache stats
+                const usage = event.metadata.usage;
+                console.log(`[Gateway] Usage: input=${usage?.inputTokens} output=${usage?.outputTokens} cacheRead=${usage?.cacheReadInputTokens || 0} cacheWrite=${usage?.cacheWriteInputTokens || 0}`);
+                if (gatewayLog && logId) {
+                    const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
+                    fs.writeFile(path.join(logDir, `${logId}_res.json`), JSON.stringify({ usage, responseText, chatId, timestamp: new Date().toISOString() }, null, 2)).catch(() => {});
+                }
                 res.write(`data: ${JSON.stringify({
                     type: 'message_delta',
-                    usage: event.metadata.usage
+                    usage: usage,
+                    responseLength: responseText.length
                 })}\n\n`);
             }
         }
@@ -663,6 +701,64 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         } else {
             res.status(500).json({ error: err.message || 'Bedrock ConverseStream error' });
         }
+    }
+});
+
+// Gateway response recovery endpoint
+app.get('/gateway/recover', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (!await checkAuth(req, res)) {
+        return;
+    }
+    try {
+        const chatId = req.query.chatId;
+        const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
+        if (!existsSync(logDir)) {
+            return res.status(404).json({ error: 'No gateway logs found' });
+        }
+        const files = (await fs.readdir(logDir))
+            .filter(f => f.endsWith('_res.json'))
+            .sort()
+            .reverse();
+
+        // 1) Match by chatId
+        if (chatId) {
+            for (const file of files) {
+                const data = JSON.parse(await fs.readFile(path.join(logDir, file), 'utf-8'));
+                if (data.chatId === chatId) {
+                    return res.json({ responseText: data.responseText, chatId: data.chatId, timestamp: data.timestamp });
+                }
+            }
+        }
+
+        // 2) Fallback: match by timestamp (for logs without chatId)
+        const msgTime = req.query.time ? parseInt(req.query.time) : 0;
+        if (msgTime) {
+            let bestMatch = null;
+            let bestDiff = Infinity;
+            for (const file of files) {
+                // Extract timestamp from filename: {timestamp}_{modelId}_res.json
+                const fileTs = parseInt(file.split('_')[0]);
+                if (isNaN(fileTs)) continue;
+                const diff = Math.abs(fileTs - msgTime);
+                // Within 5 minutes window
+                if (diff < 300000 && diff < bestDiff) {
+                    const data = JSON.parse(await fs.readFile(path.join(logDir, file), 'utf-8'));
+                    if (data.responseText) {
+                        bestMatch = data;
+                        bestDiff = diff;
+                    }
+                }
+            }
+            if (bestMatch) {
+                return res.json({ responseText: bestMatch.responseText, timestamp: bestMatch.timestamp, matchedBy: 'timestamp' });
+            }
+        }
+
+        res.status(404).json({ error: 'No matching response found' });
+    } catch (err) {
+        console.error('[Gateway] Recovery error:', err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 

@@ -1510,6 +1510,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         const reader = req.result.getReader()
         let msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length
         let prefix = ''
+        const isNewMessage = !arg.continue
         if(arg.continue){
             msgIndex -= 1
             prefix = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data
@@ -1527,28 +1528,75 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
         let lastResponseChunk:{[key:string]:string} = {}
-        while(abortSignal.aborted === false){
-            const readed = (await reader.read())
-            if(readed.value){
-                lastResponseChunk = readed.value
-                const firstChunkKey = Object.keys(lastResponseChunk)[0]
-                result = lastResponseChunk[firstChunkKey]
-                if(!result){
-                    result = ''
+        let streamError = false
+        try{
+            while(abortSignal.aborted === false){
+                const readed = (await reader.read())
+                if(readed.value){
+                    lastResponseChunk = readed.value
+                    const firstChunkKey = Object.keys(lastResponseChunk)[0]
+                    result = lastResponseChunk[firstChunkKey]
+                    if(!result){
+                        result = ''
+                    }
+                    if(DBState.db.removeIncompleteResponse){
+                        result = trimUntilPunctuation(result)
+                    }
+                    let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
+                    DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
+                    emoChanged = result2.emoChanged
+                    DBState.db.characters[selectedChar].reloadKeys += 1
                 }
-                if(DBState.db.removeIncompleteResponse){
-                    result = trimUntilPunctuation(result)
+                if(readed.done){
+                    break
                 }
-                let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
-                DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
-                emoChanged = result2.emoChanged
-                DBState.db.characters[selectedChar].reloadKeys += 1
             }
-            if(readed.done){
-                DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = false
-                DBState.db.characters[selectedChar].reloadKeys += 1
-                break
-            }   
+        }
+        catch(e){
+            console.error('[Streaming] Error while reading stream:', e)
+            streamError = true
+        }
+        finally{
+            DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = false
+            DBState.db.characters[selectedChar].reloadKeys += 1
+        }
+
+        // Check if response is incomplete by comparing with gateway's expected length
+        const expectedLength = parseInt(lastResponseChunk?.['__expectedLength'] ?? '-1')
+        const needsRecovery = !abortSignal.aborted && (streamError || !result || (expectedLength > 0 && result.length < expectedLength))
+
+        if(needsRecovery){
+            let recovered = false
+            try{
+                const { NodeStorage } = await import('../storage/nodeStorage')
+                const nodeStorage = new NodeStorage()
+                const recoveryRes = await fetch(`/gateway/recover?chatId=${encodeURIComponent(generationId)}`, {
+                    headers: { 'risu-auth': await nodeStorage.createAuth() }
+                })
+                if(recoveryRes.ok){
+                    const recoveryData = await recoveryRes.json()
+                    if(recoveryData.responseText){
+                        result = recoveryData.responseText
+                        let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
+                        DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
+                        emoChanged = result2.emoChanged
+                        DBState.db.characters[selectedChar].reloadKeys += 1
+                        recovered = true
+                        console.log(`[Streaming] Recovered response from gateway (received=${result.length}, expected=${expectedLength})`)
+                    }
+                }
+            }
+            catch(recoveryErr){
+                console.error('[Streaming] Recovery failed:', recoveryErr)
+            }
+
+            if(!recovered){
+                if(isNewMessage){
+                    DBState.db.characters[selectedChar].chats[selectedChat].message.splice(msgIndex, 1)
+                }
+                throwError('Stream connection lost. Please try again.')
+                return false
+            }
         }
 
         addRerolls(generationId, Object.values(lastResponseChunk))

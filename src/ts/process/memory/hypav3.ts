@@ -1706,22 +1706,33 @@ export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolea
             "memory"
         );
 
-        if (response.type === "streaming" || response.type === "multiline") {
-            throw new Error("Unexpected response type");
-        }
-
-        if (response.type === "fail") {
+        let resultText = ''
+        if (response.type === "streaming") {
+            const reader = response.result.getReader()
+            let lastChunk:{[key:string]:string} = {}
+            while(true){
+                const {done, value} = await reader.read()
+                if(value) lastChunk = value
+                if(done) break
+            }
+            const firstKey = Object.keys(lastChunk)[0]
+            resultText = firstKey ? lastChunk[firstKey] : ''
+        } else if (response.type === "multiline") {
+            resultText = response.result.map((r: any) => r[1]).join('\n')
+        } else if (response.type === "fail") {
             throw new Error(response.result);
+        } else {
+            resultText = response.result
         }
 
-        if (!response.result || response.result.trim().length === 0) {
+        if (!resultText || resultText.trim().length === 0) {
             throw new Error("Empty summary returned");
         }
 
         // Remove thoughts content for API
         const thoughtsRegex = /<Thoughts>[\s\S]*?<\/Thoughts>/g;
 
-        return response.result.replace(thoughtsRegex, "").trim();
+        return resultText.replace(thoughtsRegex, "").trim();
     }
 
     // Local

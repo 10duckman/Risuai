@@ -777,6 +777,12 @@ async function fetchWithProxy(url: string, arg: GlobalFetchArgs): Promise<Global
             const auth = localStorage.getItem('risuauth');
             if (auth) {
                 headers["risu-auth"] = auth;
+            } else {
+                try {
+                    const { NodeStorage } = await import('./storage/nodeStorage');
+                    const nodeStorage = new NodeStorage();
+                    headers["risu-auth"] = await nodeStorage.createAuth();
+                } catch(e) {}
             }
         }
 
