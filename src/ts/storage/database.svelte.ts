@@ -646,6 +646,7 @@ export function setDatabase(data:Database){
     // If the user uses plugins, its probably better to enable RisuAI Pro Tools by default
     // Because its likely they are power users who would benefit from the features
     data.enableRisuaiProTools ??= data.plugins.length > 0
+    data.keepSessionAlive ??= 'off'
     changeLanguage(data.language)
     setDatabaseLite(data)
 }
@@ -1169,6 +1170,7 @@ export interface Database{
     seperateParametersByModel?:boolean
     disableSeperateParameterChangeOnPresetChange?:boolean
     saveSignatures?:boolean
+    keepSessionAlive: 'off' | 'pip' | 'sound'
 }
 
 export interface SeparateParameters{
