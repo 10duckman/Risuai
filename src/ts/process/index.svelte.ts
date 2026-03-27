@@ -573,13 +573,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             }
         }
         return text.replace(positionRegex, (match, p1) => {
-            const MatchingLorebooks = lorepmt.actives.filter(v => {
-                return v.pos === ('pt_' + p1)
-            })
-
-            return MatchingLorebooks.map(v => {
-                return v.prompt
-            }).join('\n')
+            const posMatch = 'pt_' + p1
+            const matchingPrompts: string[] = []
+            for (const v of lorepmt.actives) {
+                if (v.pos === posMatch) {
+                    matchingPrompts.push(v.prompt)
+                }
+            }
+            return matchingPrompts.join('\n')
         })
     }
 
@@ -1527,11 +1528,30 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             })
         }
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
+        DBState.db.characters[selectedChar].reloadKeys += 1
         let lastResponseChunk:{[key:string]:string} = {}
+        let streamAborted:boolean = abortSignal.aborted
         let streamError = false
-        try{
-            while(abortSignal.aborted === false){
-                const readed = (await reader.read())
+        const abortReader = () => {
+            streamAborted = true
+            void reader.cancel().catch(() => {})
+        }
+        abortSignal.addEventListener('abort', abortReader, { once: true })
+        try {
+            while(streamAborted === false){
+                let readed: ReadableStreamReadResult<{ [key: string]: string }>
+                try {
+                    readed = await reader.read()
+                }
+                catch(error){
+                    if(abortSignal.aborted || streamAborted){
+                        streamAborted = true
+                        break
+                    }
+                    console.error('[Streaming] Error while reading stream:', error)
+                    streamError = true
+                    break
+                }
                 if(readed.value){
                     lastResponseChunk = readed.value
                     const firstChunkKey = Object.keys(lastResponseChunk)[0]
@@ -1552,18 +1572,20 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 }
             }
         }
-        catch(e){
-            console.error('[Streaming] Error while reading stream:', e)
-            streamError = true
-        }
-        finally{
+        finally {
+            abortSignal.removeEventListener('abort', abortReader)
             DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = false
             DBState.db.characters[selectedChar].reloadKeys += 1
+            void reader.cancel().catch(() => {})
+        }
+
+        if(streamAborted || abortSignal.aborted){
+            return false
         }
 
         // Check if response is incomplete by comparing with gateway's expected length
         const expectedLength = parseInt(lastResponseChunk?.['__expectedLength'] ?? '-1')
-        const needsRecovery = !abortSignal.aborted && (streamError || !result || (expectedLength > 0 && result.length < expectedLength))
+        const needsRecovery = streamError || !result || (expectedLength > 0 && result.length < expectedLength)
 
         if(needsRecovery){
             let recovered = false
