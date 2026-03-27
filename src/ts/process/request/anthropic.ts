@@ -437,6 +437,10 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
 
             if (body.thinking?.type === "enabled" || body.thinking?.type === "adaptive") {
                 gatewayBody.inferenceConfig.temperature = 1.0
+                gatewayBody.thinking = body.thinking
+                if (body.output_config?.effort) {
+                    gatewayBody.thinkingEffort = body.output_config.effort
+                }
             }
 
             // Direct fetch to server gateway endpoint

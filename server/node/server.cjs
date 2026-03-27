@@ -544,7 +544,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
     }
 
     try {
-        const { modelId, messages, system, inferenceConfig, bearerToken: clientBearerToken } = req.body;
+        const { modelId, messages, system, inferenceConfig, bearerToken: clientBearerToken, thinking: thinkingConfig, thinkingEffort } = req.body;
 
         if (!modelId) {
             res.status(400).json({ error: 'modelId is required' });
@@ -608,12 +608,27 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             }
         }
 
-        const command = new ConverseStreamCommand({
+        const commandParams = {
             modelId,
             messages,
             system: system ? [{ text: system }, { cachePoint: { type: "default", ttl: cacheTtl } }] : undefined,
             inferenceConfig,
-        });
+        };
+
+        if (thinkingConfig?.type === 'enabled' && thinkingConfig?.budget_tokens > 0) {
+            commandParams.additionalModelRequestFields = {
+                thinking: { type: 'enabled', budget_tokens: thinkingConfig.budget_tokens }
+            };
+        } else if (thinkingConfig?.type === 'adaptive') {
+            commandParams.additionalModelRequestFields = {
+                thinking: { type: 'adaptive' }
+            };
+            if (thinkingEffort) {
+                commandParams.additionalModelRequestFields.thinking.effort = thinkingEffort;
+            }
+        }
+
+        const command = new ConverseStreamCommand(commandParams);
 
         // SSE headers
         res.setHeader('Content-Type', 'text/event-stream');
