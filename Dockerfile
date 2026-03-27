@@ -14,6 +14,8 @@ RUN corepack install --global pnpm@latest
 # ------------------------------------------------------------------------------------------
 
 FROM base AS deps
+# Install build tools for native addons (better-sqlite3)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 # Install only prod deps
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --no-frozen-lockfile
 

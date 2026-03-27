@@ -1801,9 +1801,175 @@ function setupProxyStreamWebSocket(server) {
     });
 }
 
-async function startServer() {
+// =====================================================================
+// v2 API — SQLite-backed REST endpoints
+// =====================================================================
+
+const risuDb = require('./db.cjs');
+
+// --- Config ---
+app.get('/api/v2/config', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
     try {
-      
+        const config = risuDb.getConfig();
+        res.json(config || {});
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.patch('/api/v2/config', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const updated = risuDb.patchConfig(req.body);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Characters ---
+app.get('/api/v2/characters', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const list = risuDb.getCharacterList();
+        res.json(list);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/v2/characters/:chaId', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const char = risuDb.getCharacter(req.params.chaId);
+        if (!char) return res.status(404).json({ error: 'Character not found' });
+        res.json(char);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put('/api/v2/characters/:chaId', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        risuDb.upsertCharacter(req.params.chaId, req.body);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/v2/characters/:chaId', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        risuDb.deleteCharacter(req.params.chaId);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Chats ---
+app.get('/api/v2/characters/:chaId/chats', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const list = risuDb.getChatList(req.params.chaId);
+        res.json(list);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/v2/chats/:chatId', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const chat = risuDb.getChat(req.params.chatId);
+        if (!chat) return res.status(404).json({ error: 'Chat not found' });
+        res.json(chat);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Messages ---
+app.get('/api/v2/chats/:chatId/messages', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const limit = parseInt(req.query.limit) || 30;
+        const offset = parseInt(req.query.offset) || 0;
+        const messages = risuDb.getMessages(req.params.chatId, limit, offset);
+        const count = risuDb.getMessageCount(req.params.chatId);
+        res.json({ messages, total: count });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/v2/chats/:chatId/messages', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const { seq, message } = req.body;
+        risuDb.appendMessage(req.params.chatId, seq, message);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put('/api/v2/chats/:chatId/messages/:seq', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        risuDb.updateMessage(req.params.chatId, parseInt(req.params.seq), req.body);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Presets ---
+app.get('/api/v2/presets', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const presets = risuDb.getPresets();
+        res.json(presets);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put('/api/v2/presets/:id', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        risuDb.upsertPreset(parseInt(req.params.id), req.body);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Modules ---
+app.get('/api/v2/modules', authRouteLimiter, async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const modules = risuDb.getModules();
+        res.json(modules);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+async function startServer() {
+    // Run migration on startup
+    try {
+        const { migrate } = require('./migrate.cjs');
+        await migrate();
+    } catch (e) {
+        console.error('[Server] Migration error:', e.message);
+    }
+
+    try {
+
         const port = process.env.PORT || 6001;
         const httpsOptions = await getHttpsOptions();
         let server = null;
