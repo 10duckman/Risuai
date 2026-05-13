@@ -143,8 +143,6 @@ export const languageEnglish = {
             "- Scope is OpenAI-compatible request paths only.\n" +
             "- This does not bypass Cloudflare origin limits between two public domains.\n" +
             "- Use your self-host URL (where `globalThis.__NODE__ === true`) for this feature to take effect.",
-        forcePlainFetch: "If enabled, it will use browser fetch api instead of native http request. This can cause CORS errors.",
-        autoFillRequestURL: "If enabled, it will autofill request URL to match the current model.",
         chainOfThought: "If enabled, it will add chain of thought prompt to the prompt.",
         gptVisionQuality: "This option is used to set the quality of the image detection model. The higher the quality, the more accurate the detection, but more tokens are used.",
         genTimes:
@@ -221,7 +219,7 @@ export const languageEnglish = {
         systemContentReplacement: "The prompt format that replaces system prompt if the model doesn't support system prompt.",
         systemRoleReplacement: "The role that replaces system role if the model doesn't support system role.",
         summarizationPrompt:
-            "The prompt that is used for summarization. If it is blank, it will use the default prompt. You can also use ChatML formating with {{slot}} for the chat data. The summary output is split by double newlines (\\n\\n) into chunks for similarity search.",
+            "The prompt that is used for summarization. If it is blank, it will use the default prompt. You can also use ChatML formating with {{slot}} for the chat data.",
         translatorPrompt:
             "The prompt that is used for translation. If it is blank, it will use the default prompt. You can also use ChatML formating with {{slot}} for the dest language, {{slot::content}} for the content, and {{slot::tnote}} for the translator note.",
         translateBeforeHTMLFormatting:
@@ -245,8 +243,6 @@ export const languageEnglish = {
         settingsCloseButtonSize: "Adjusts the size of the close (X) button in the top right corner of the settings window. Default is 24.",
         showTypingEffect: "When enabled, it will show a typing indicator while the assistant is generating a response.",
         dynamicOutputPrompt: "When enabled, the schema information will be included in the request.",
-        sourcemapTranslate:
-            "If enabled, stack traces from errors will be automatically translated to show the original source code location, using sourcemaps. This is useful for debugging.",
         realmDirectOpen: "If enabled, clicking a character in RisuRealm preview will directly open the character description.",
         openRouterProviderOrder:
             "The order of providers to use, the first provider will be used first, if the provider is not available, it will use the next provider. See datail on https://openrouter.ai/docs/guides/routing/provider-selection#ordering-specific-providers",
@@ -269,7 +265,7 @@ export const languageEnglish = {
             "Keeps the tab active and prevents the session from expiring due to inactivity in browsers. This may require refresh to take effect.\n\n" +
             "- **Via Sound**: Plays a silent audio at regular intervals to keep the session alive. This method is known as most compatible and effective in most browsers.\n",
         reSummarizationPrompt:
-            "The prompt used when merging multiple selected summaries into one via bulk edit. If blank, the default prompt is used. The summary output is split by double newlines (\\n\\n) into chunks for similarity search.",
+            "The prompt used when merging multiple selected summaries into one via bulk edit. If blank, the default prompt is used.",
         hypaV3MemoryTokensRatio:
             "The fraction of the max context size allocated to the long-term memory block {{slot}} in the prompt.",
         hypaV3ExtraSummarizationRatio:
@@ -305,6 +301,9 @@ export const languageEnglish = {
         hypaV3QueryChatCount:
             "The number of recent chat messages used as the query for similarity search. " +
             "Higher values use more chat context to determine similarity.",
+        hypaV3SummaryChunkSeparator:
+            "Separator used to split summaries into chunks for similarity search.",
+        coldstorage: "Coldstorage is a feature that automatically moves old chats and character data to a seperate storage to reduce the size of the main storage and improve performance. This will reduce the transfer time, transfer traffic and improve the performance when loading chats."
     },
     setup: {
         chooseProvider: "Choose AI Provider",
@@ -1080,6 +1079,11 @@ export const languageEnglish = {
     openRouterProviderOnly: "Allowed Providers",
     openRouterProviderIgnore: "Ignored Providers",
     openRouterSearchModel: "Search models...",
+    openRouterSortByName: "Name",
+    openRouterSortByPrice: "Price",
+    openRouterSortByProvider: "Provider",
+    openRouterSortAsc: "Asc",
+    openRouterSortDesc: "Desc",
     geminiApiKey: "Gemini API Key",
     removePunctuationHypa: "Memory Punctuation Removal",
     memoryLimitThickness: "Memory Limit Thickness",
@@ -1350,6 +1354,7 @@ export const languageEnglish = {
         extraSummarizationRatioLabel: "Extra Summarization Ratio",
         maxChatsPerSummaryLabel: "Max Messages Per Summary",
         queryChatCountLabel: "Query Chat Count",
+        summaryChunkSeparatorLabel: "Chunk Separator Regex",
         recentMemoryRatioLabel: "Recent Memory Ratio",
         similarMemoryRatioLabel: "Similar Memory Ratio",
         randomMemoryRatioLabel: "Random Memory Ratio",
@@ -1466,6 +1471,8 @@ export const languageEnglish = {
         webcam: "Toggle Webcam",
         focusInput: "Focus Input",
         scrollToActiveChar: "Scroll to Active Character",
+        popupEditor: "Popup Editor",
+        loadout: "Loadout",
     },
     screenTooSmall: "Screen is too small to show the interface.",
     advancedModelSettings: "Advanced Model Settings",
@@ -1519,11 +1526,9 @@ export const languageEnglish = {
     showTypingEffect: "Show Typing Effect",
     dynamicRequest: "Dynamic Request",
     dynamicOutputPrompt: "Dynamic Output Prompt",
-    sourcemapTranslate: "Translate stack traces using sourcemaps",
     settingsCloseButtonSize: "Settings Close Button Size",
     translating: "Translating...",
-    showOriginal: "Show Original Code Address",
-    translateCode: "Translate Code Address",
+    stackTraceTranslationFailed: "Stack trace translation failed. Showing original obfuscated stack trace below.",
     apply: "Apply",
     add: "Add",
     nightlyWarning:
@@ -1577,6 +1582,7 @@ export const languageEnglish = {
     mainDomAccessConsent: "Plugin {} is requesting to access the main Document, which may expose sensitive information. Do you want to allow this?",
     replacerPermissionConsent: "Plugin {} is requesting permission to replace content in the chat, which may be used to manipulate the conversation. Do you want to allow this?",
     providerPermissionConsent: "Plugin {} is requesting permission to access the provider, which may allow it to make unauthorized API calls. Do you want to allow this?",
+    sendChatConsent: "Plugin {} is requesting permission to send chat messages on your behalf, which will trigger AI responses. Do you want to allow this?",
     pluginV2Warning: "Plugin V2 and V2.1 is considered unsafe and will stop working in future versions. **Please do not use these versions of plugins.**. If you are the developer of this plugin, please update to V3 as soon as possible.",
     createFolderOnBranch: "Create Folder on Branch",
     hamburgerButtonBottom: "Move Menu Button to Bottom of Sidebar",
@@ -1625,6 +1631,56 @@ export const languageEnglish = {
     keepSessionAlive: "Keep Session Alive",
     keepSessionAlivePip: "Via PIP",
     keepSessionAliveSound: "Via Sound",
+    // NanoGPT Dashboard
+    nanoGPTLoadingAccountInfo: "Loading account info…",
+    nanoGPTCreditBalance: "Credit Balance:",
+    nanoGPTSubscription: "Subscription",
+    nanoGPTGraceUntil: (date: string) => `until ${date}`,
+    nanoGPTNoActiveSubscription: "No active subscription.",
+    nanoGPTCancelsAtPeriodEnd: (date: string) => `Cancels at period end (${date})`,
+    nanoGPTWeeklyTokens: (pct: string) => `Weekly Included Input Tokens — ${pct} used`,
+    nanoGPTDailyTokens: (pct: string) => `Daily Included Input Tokens — ${pct} used`,
+    nanoGPTDailyImages: (pct: string) => `Daily Included Images — ${pct} used`,
+    nanoGPTResets: (date: string) => `Resets ${date}`,
+    nanoGPTUsed: (n: string) => `${n} used`,
+    nanoGPTRemaining: (n: string) => `${n} remaining`,
+    nanoGPTRenews: (date: string) => `Renews: ${date}`,
+    nanoGPTCouldNotLoadAccountInfo: "Could not load account info.",
+    nanoGPTWeeklyTokensLabel: "Weekly Included Input Tokens",
+    nanoGPTDailyTokensLabel: "Daily Included Input Tokens",
+    nanoGPTDailyImagesLabel: "Daily Included Images",
+    nanoGPTUsedLabel: "used",
+    nanoGPTRemainingLabel: "remaining",
+    nanoGPTResetsLabel: "Resets",
+    nanoGPTRenewsLabel: "Renews:",
+    // NanoGPT Provider Picker
+    nanoGPTProvider: "Provider",
+    nanoGPTProviderPayAsYouGoOnly: "(only available in pay-as-you-go mode)",
+    nanoGPTProviderAuto: "Auto",
+    nanoGPTProviderFree: "Free",
+    nanoGPTProviderInput: "Input",
+    nanoGPTProviderOutput: "Output",
+    nanoGPTProviderQuantization: "Quantization",
+    nanoGPTProviderUndisclosed: "Undisclosed",
+    nanoGPTProviderCache: "Cache",
+    nanoGPTProviderCacheSupported: "Supported",
+    nanoGPTProviderCacheNotSupported: "Not supported",
+    nanoGPTProviderCacheRead: "Cache read",
+    // NanoGPT Settings
+    nanoGPTUseSubscriptionEndpoint: "Use subscription endpoint & models",
+    // Model Grid
+    modelGridCouldNotLoad: "Could not load model list. Check your API key.",
+    modelGridNoModelsMatch: (q: string) => `No models match "${q}"`,
+    modelGridContext: (n: string) => `Context: ${n}`,
+    loadouts: "Loadouts",
+    loadout: "Loadout",
+
+    nanoGPTSelectFromList: "Select from List",
+    nanoGPTManualInput: "Manual Input",
+    nanoGPTManualModelSelect: "Manual Model Select",
+    coldStorage: "Cold Storage",
+    cleanColdStorage: "Clean Unused Cold Storage",
+    customSidebarConfig: "Custom Sidebar Configuration",
 } satisfies I18nTranslation;
 
 type I18nTranslationFunction = (...args: any[]) => string;

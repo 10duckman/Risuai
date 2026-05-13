@@ -203,12 +203,6 @@ export async function loadData() {
                     characterURLImport()
                 }
             }
-            LoadingStatusState.text = "Checking Unnecessary Files..."
-            try {
-                await cleanChunks()
-            } catch (error) {
-                console.error(error)
-            }
             LoadingStatusState.text = "Loading Plugins..."
             try {
                 await loadPlugins()
@@ -252,21 +246,20 @@ export async function loadData() {
                 initMobileGesture()
                 MobileGUI.set(true)
             }
+            await makeColdData()
             loadedStore.set(true)
             selectedCharID.set(-1)
             startObserveDom()
             assignIds()
-            makeColdData()
             registerModelDynamic()
             saveDb()
             moduleUpdate()
-            if (import.meta.env.VITE_RISU_TOS === 'TRUE') {
-                alertTOS().then((a) => {
-                    if (a === false) {
-                        location.reload()
-                    }
-                })
-            }
+            alertTOS().then((a) => {
+                if (a === false) {
+                    location.reload()
+                }
+            })
+            
         } catch (error) {
             alertError(error)
         }
@@ -294,7 +287,9 @@ async function registerSw() {
 function updateErrorHandling() {
     const errorHandler = (event: ErrorEvent) => {
         console.error(event.error);
-        alertError(event.error);
+        if(!(event.error.target instanceof Worker)){
+            alertError(event.error);            
+        }
     };
     const rejectHandler = (event: PromiseRejectionEvent) => {
         console.error(event.reason);
@@ -583,6 +578,9 @@ async function cleanChunks() {
                 if(!uncleanable.has(n)) {
                     await forageStorage.removeItem(asset)
                 }
+            }
+            else if (asset.endsWith('.meta')){
+                continue
             }
             else if (asset.startsWith('remotes/')) {
                 const name = getBasename(asset).slice(0, -10) //remove .local.bin

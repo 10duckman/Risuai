@@ -9,7 +9,7 @@ import { callTool, decodeToolCall, encodeToolCall } from "../mcp/mcp"
 import { alertError } from "src/ts/alert";
 import { addFetchLog } from "src/ts/globalApi.svelte"
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from './request'
-import { applyParameters, type LLMParameter } from './shared'
+import { applyAdditionalParameters, applyParameters, getAdditionalParameters, type LLMParameter } from './shared'
 import { bodyIntercepterStore } from "src/ts/stores.svelte"
 
 type GeminiFunctionCall = {
@@ -325,7 +325,7 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
         return arg.modelInfo.parameters.includes(v)
     })
 
-    const body = {
+    let body: any = {
         contents: reformatedChat,
         generation_config: applyParameters({
             "maxOutputTokens": maxTokens
@@ -576,6 +576,10 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
     // will return error if functionDeclarations is empty
     if(body.tools?.functionDeclarations?.length === 0){
         body.tools = undefined
+    }
+
+    if(arg.aiModel === 'reverse_proxy' || arg.aiModel?.startsWith('xcustom:::')){
+        body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel))
     }
 
     if(arg.previewBody){
