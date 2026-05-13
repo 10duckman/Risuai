@@ -168,6 +168,7 @@ export const modelSpecificParameterItems: SettingItem[] = [
                 { value: 'low', label: 'Low' },
                 { value: 'medium', label: 'Medium' },
                 { value: 'high', label: 'High' },
+                { value: 'xhigh', label: 'XHigh' },
                 { value: 'max', label: 'Max' },
             ]
         },

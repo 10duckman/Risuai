@@ -1188,6 +1188,16 @@ app.options('/gateway/bedrock-stream', (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth, x-chat-id, x-cache-ttl');
     res.status(204).end();
 });
+// In-memory stream buffer for recovery after client disconnect
+const activeStreams = new Map(); // chatId → { text, done, timestamp }
+const STREAM_TTL = 30 * 60 * 1000; // 30 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of activeStreams) {
+        if (now - entry.timestamp > STREAM_TTL) activeStreams.delete(id);
+    }
+}, 60 * 1000);
+
 app.post('/gateway/bedrock-stream', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     if (!await checkAuth(req, res)) {
@@ -1287,15 +1297,30 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
 
+        // Safe write helper — silently absorbs write errors on closed connections
+        const safeWrite = (data) => {
+            if (clientDisconnected || res.destroyed) return false;
+            try { return res.write(data); }
+            catch (e) { clientDisconnected = true; return false; }
+        };
+
         // Heartbeat to prevent iOS WebKit 60s timeout
         const heartbeat = setInterval(() => {
-            res.write(':heartbeat\n\n');
+            safeWrite(':heartbeat\n\n');
         }, 15000);
 
-        // Handle client disconnect
+        // Track client disconnect
+        let clientDisconnected = false;
+        res.on('error', () => { clientDisconnected = true; });
         req.on('close', () => {
             clearInterval(heartbeat);
+            clientDisconnected = true;
         });
+
+        // Register stream buffer for recovery
+        if (chatId) {
+            activeStreams.set(chatId, { text: '', done: false, timestamp: Date.now() });
+        }
 
         const response = await client.send(command);
 
@@ -1305,8 +1330,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             if (event.contentBlockStart) {
                 const block = event.contentBlockStart.start;
                 if (block?.toolUse) {
-                    // tool use block — pass as-is
-                    res.write(`data: ${JSON.stringify({
+                    safeWrite(`data: ${JSON.stringify({
                         type: 'content_block_start',
                         content_block: { type: 'tool_use', id: block.toolUse.toolUseId, name: block.toolUse.name }
                     })}\n\n`);
@@ -1315,37 +1339,34 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
                 const delta = event.contentBlockDelta.delta;
                 if (delta?.text) {
                     responseText += delta.text;
-                    // Text delta — emit as Anthropic SSE format
-                    res.write(`data: ${JSON.stringify({
+                    if (chatId) activeStreams.get(chatId).text = responseText;
+                    safeWrite(`data: ${JSON.stringify({
                         type: 'content_block_delta',
                         delta: { type: 'text_delta', text: delta.text }
                     })}\n\n`);
                 } else if (delta?.reasoningContent?.text) {
-                    // Thinking delta
-                    res.write(`data: ${JSON.stringify({
+                    safeWrite(`data: ${JSON.stringify({
                         type: 'content_block_delta',
                         delta: { type: 'thinking_delta', thinking: delta.reasoningContent.text }
                     })}\n\n`);
                 } else if (delta?.toolUse) {
-                    // Tool use delta
-                    res.write(`data: ${JSON.stringify({
+                    safeWrite(`data: ${JSON.stringify({
                         type: 'content_block_delta',
                         delta: { type: 'input_json_delta', partial_json: delta.toolUse.input }
                     })}\n\n`);
                 }
             } else if (event.messageStop) {
-                res.write(`data: ${JSON.stringify({
+                safeWrite(`data: ${JSON.stringify({
                     type: 'message_stop'
                 })}\n\n`);
             } else if (event.metadata) {
-                // Usage info + cache stats
                 const usage = event.metadata.usage;
                 console.log(`[Gateway] Usage: input=${usage?.inputTokens} output=${usage?.outputTokens} cacheRead=${usage?.cacheReadInputTokens || 0} cacheWrite=${usage?.cacheWriteInputTokens || 0}`);
                 if (gatewayLog && logId) {
                     const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
                     fs.writeFile(path.join(logDir, `${logId}_res.json`), JSON.stringify({ usage, responseText, chatId, timestamp: new Date().toISOString() }, null, 2)).catch(() => {});
                 }
-                res.write(`data: ${JSON.stringify({
+                safeWrite(`data: ${JSON.stringify({
                     type: 'message_delta',
                     usage: usage,
                     responseLength: responseText.length
@@ -1353,71 +1374,79 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             }
         }
 
+        // Send explicit stream completion marker before ending
+        safeWrite(`data: ${JSON.stringify({
+            type: 'stream_complete',
+            responseLength: responseText.length
+        })}\n\n`);
+
+        if (clientDisconnected) {
+            console.log(`[Gateway] Client disconnected during stream, response saved (${responseText.length} chars). chatId=${chatId}`);
+        }
+
+        // Mark stream as complete
+        if (chatId && activeStreams.has(chatId)) {
+            activeStreams.get(chatId).done = true;
+            activeStreams.get(chatId).text = responseText;
+        }
+
         clearInterval(heartbeat);
-        res.end();
+        if (!clientDisconnected) res.end();
     } catch (err) {
         console.error(`[Gateway] Bedrock error:`, err.message || err);
         // If headers already sent, send error via SSE
         if (res.headersSent) {
-            res.write(`data: ${JSON.stringify({
-                type: 'error',
-                error: { message: err.message || 'Bedrock ConverseStream error' }
-            })}\n\n`);
-            res.end();
+            try {
+                if (!res.destroyed) {
+                    res.write(`data: ${JSON.stringify({
+                        type: 'error',
+                        error: { message: err.message || 'Bedrock ConverseStream error' }
+                    })}\n\n`);
+                }
+            } catch (e) {}
+            try { res.end(); } catch(e) {}
         } else {
             res.status(500).json({ error: err.message || 'Bedrock ConverseStream error' });
         }
     }
 });
 
+// Gateway recovery CORS preflight
+app.options('/gateway/recover', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth');
+    res.status(204).end();
+});
 // Gateway response recovery endpoint
 app.get('/gateway/recover', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    if (!await checkAuth(req, res)) {
-        return;
-    }
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth');
     try {
         const chatId = req.query.chatId;
+        if (!chatId) {
+            return res.status(400).json({ error: 'chatId is required' });
+        }
+
+        // 1) Check in-memory buffer first (fast, works even if GATEWAY_LOG=false)
+        const stream = activeStreams.get(chatId);
+        if (stream) {
+            return res.json({ responseText: stream.text, done: stream.done, chatId });
+        }
+
+        // 2) Fallback to log files
         const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
         if (!existsSync(logDir)) {
-            return res.status(404).json({ error: 'No gateway logs found' });
+            return res.status(404).json({ error: 'No matching response found' });
         }
         const files = (await fs.readdir(logDir))
             .filter(f => f.endsWith('_res.json'))
             .sort()
             .reverse();
-
-        // 1) Match by chatId
-        if (chatId) {
-            for (const file of files) {
-                const data = JSON.parse(await fs.readFile(path.join(logDir, file), 'utf-8'));
-                if (data.chatId === chatId) {
-                    return res.json({ responseText: data.responseText, chatId: data.chatId, timestamp: data.timestamp });
-                }
-            }
-        }
-
-        // 2) Fallback: match by timestamp (for logs without chatId)
-        const msgTime = req.query.time ? parseInt(req.query.time) : 0;
-        if (msgTime) {
-            let bestMatch = null;
-            let bestDiff = Infinity;
-            for (const file of files) {
-                // Extract timestamp from filename: {timestamp}_{modelId}_res.json
-                const fileTs = parseInt(file.split('_')[0]);
-                if (isNaN(fileTs)) continue;
-                const diff = Math.abs(fileTs - msgTime);
-                // Within 5 minutes window
-                if (diff < 300000 && diff < bestDiff) {
-                    const data = JSON.parse(await fs.readFile(path.join(logDir, file), 'utf-8'));
-                    if (data.responseText) {
-                        bestMatch = data;
-                        bestDiff = diff;
-                    }
-                }
-            }
-            if (bestMatch) {
-                return res.json({ responseText: bestMatch.responseText, timestamp: bestMatch.timestamp, matchedBy: 'timestamp' });
+        for (const file of files) {
+            const data = JSON.parse(await fs.readFile(path.join(logDir, file), 'utf-8'));
+            if (data.chatId === chatId) {
+                return res.json({ responseText: data.responseText, done: true, chatId });
             }
         }
 

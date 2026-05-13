@@ -45,6 +45,19 @@ export const LLMModels: LLMModel[] = [
     ...AnthropicModels,
     // AWS Bedrock Claude models
     {
+        name: "Claude 4.7 Opus (Bedrock)",
+        id: 'anthropic.claude-opus-4-7',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
         name: "Claude 4.6 Sonnet (Bedrock)",
         id: 'anthropic.claude-sonnet-4-6',
         provider: LLMProvider.AWS,

@@ -476,53 +476,66 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
                 async start(controller){
                     let text = ''
                     let expectedLength = -1
+                    let streamComplete = false
                     const reader = res.body.getReader()
                     let buffer = ''
                     const decoder = new TextDecoder()
 
-                    while(true){
-                        if(arg?.abortSignal?.aborted) break
-                        const {done, value} = await reader.read()
-                        if(done) break
+                    try{
+                        while(true){
+                            if(arg?.abortSignal?.aborted) break
+                            const {done, value} = await reader.read()
+                            if(done) break
 
-                        buffer += decoder.decode(value, {stream: true})
+                            buffer += decoder.decode(value, {stream: true})
 
-                        // Process complete lines only
-                        let newlineIdx
-                        while((newlineIdx = buffer.indexOf('\n')) !== -1){
-                            const line = buffer.slice(0, newlineIdx)
-                            buffer = buffer.slice(newlineIdx + 1)
+                            // Process complete lines only
+                            let newlineIdx
+                            while((newlineIdx = buffer.indexOf('\n')) !== -1){
+                                const line = buffer.slice(0, newlineIdx)
+                                buffer = buffer.slice(newlineIdx + 1)
 
-                            if(line.startsWith('data: ')){
-                                try {
-                                    const parsed = JSON.parse(line.slice(6))
-                                    if(parsed?.type === 'content_block_delta'){
-                                        if(parsed?.delta?.type === 'text_delta'){
-                                            if(thinking){ text += "</Thoughts>\n\n"; thinking = false }
-                                            text += parsed.delta?.text ?? ''
+                                if(line.startsWith('data: ')){
+                                    try {
+                                        const parsed = JSON.parse(line.slice(6))
+                                        if(parsed?.type === 'content_block_delta'){
+                                            if(parsed?.delta?.type === 'text_delta'){
+                                                if(thinking){ text += "</Thoughts>\n\n"; thinking = false }
+                                                text += parsed.delta?.text ?? ''
+                                            }
+                                            if(parsed?.delta?.type === 'thinking_delta'){
+                                                if(!thinking){ text += "<Thoughts>\n"; thinking = true }
+                                                text += parsed.delta?.thinking ?? ''
+                                            }
                                         }
-                                        if(parsed?.delta?.type === 'thinking_delta'){
-                                            if(!thinking){ text += "<Thoughts>\n"; thinking = true }
-                                            text += parsed.delta?.thinking ?? ''
+                                        if(parsed?.type === 'message_delta' && parsed?.responseLength != null){
+                                            expectedLength = parsed.responseLength
                                         }
-                                    }
-                                    if(parsed?.type === 'message_delta' && parsed?.responseLength != null){
-                                        expectedLength = parsed.responseLength
-                                    }
-                                    if(parsed?.type === 'error'){
-                                        text += "Error:" + parsed?.error?.message
-                                    }
-                                } catch(e) {}
+                                        if(parsed?.type === 'stream_complete'){
+                                            streamComplete = true
+                                            if(parsed?.responseLength != null){
+                                                expectedLength = parsed.responseLength
+                                            }
+                                        }
+                                        if(parsed?.type === 'error'){
+                                            text += "Error:" + parsed?.error?.message
+                                        }
+                                    } catch(e) {}
+                                }
+                            }
+
+                            if(text){
+                                controller.enqueue({"0": text})
                             }
                         }
-
-                        if(text){
-                            controller.enqueue({"0": text})
-                        }
+                    }
+                    catch(e){
+                        console.error('[Gateway SSE] Stream read error:', e)
                     }
 
                     if(thinking){ text += "</Thoughts>\n\n" }
-                    if(text) controller.enqueue({"0": text, "__expectedLength": String(expectedLength)})
+                    // Always enqueue final chunk with stream status (even after error)
+                    controller.enqueue({"0": text || '', "__expectedLength": String(expectedLength), "__streamComplete": streamComplete ? "true" : "false"})
                     controller.close()
                 }
             })
