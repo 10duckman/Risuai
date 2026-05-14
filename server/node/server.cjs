@@ -1553,12 +1553,17 @@ app.get('/api/read', authenticatedRouteLimiter, async (req, res, next) => {
         return;
     }
     try {
-        if(!existsSync(path.join(savePath, filePath))){
+        const fullPath = path.join(savePath, filePath);
+        if(!existsSync(fullPath)){
             res.send();
         }
         else{
+            try {
+                const stat = await fs.stat(fullPath);
+                res.setHeader('x-server-mtime', String(Math.floor(stat.mtimeMs)));
+            } catch(e) {}
             res.setHeader('Content-Type','application/octet-stream');
-            res.sendFile(path.join(savePath, filePath));
+            res.sendFile(fullPath);
         }
     } catch (error) {
         next(error);
@@ -1634,7 +1639,38 @@ app.post('/api/write', authenticatedRouteLimiter, async (req, res, next) => {
     }
 
     try {
-        await fs.writeFile(path.join(savePath, filePath), fileContent);
+        const fullPath = path.join(savePath, filePath);
+        // mtime guard — only enforced for the main DB file. Reject writes that
+        // were prepared from a stale snapshot (e.g. mobile pushing a cached
+        // truncated version after the server already received a fresh
+        // recovery patch). Non-DB files keep last-write-wins for compatibility.
+        const decodedPath = Buffer.from(filePath, 'hex').toString('utf-8');
+        const isDbFile = decodedPath === 'database/database.bin';
+        const ifMatchMtime = req.headers['if-match-mtime'];
+        if (isDbFile && ifMatchMtime && existsSync(fullPath)) {
+            try {
+                const stat = await fs.stat(fullPath);
+                const currentMtime = Math.floor(stat.mtimeMs);
+                const expected = parseInt(ifMatchMtime, 10);
+                if (!isNaN(expected) && currentMtime !== expected) {
+                    res.setHeader('x-server-mtime', String(currentMtime));
+                    res.status(409).send({
+                        error: 'mtime_conflict',
+                        currentMtime,
+                        expectedMtime: expected,
+                    });
+                    console.log(`[Storage] mtime conflict on database.bin: client expected ${expected}, server has ${currentMtime}. Rejecting write.`);
+                    return;
+                }
+            } catch(e) {
+                // stat failed — fall through to write (fail-open)
+            }
+        }
+        await fs.writeFile(fullPath, fileContent);
+        try {
+            const stat = await fs.stat(fullPath);
+            res.setHeader('x-server-mtime', String(Math.floor(stat.mtimeMs)));
+        } catch(e) {}
         res.send({
             success: true
         });

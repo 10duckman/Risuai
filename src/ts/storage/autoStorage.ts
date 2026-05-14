@@ -19,7 +19,25 @@ export class AutoStorage{
         if(this.isAccount){
             return await (this.realStorage as AccountStorage).setItem(key, value)
         }
-        await this.realStorage.setItem(key, value)
+        try {
+            await this.realStorage.setItem(key, value)
+        } catch(e:any) {
+            if(e?.code === 'mtime_conflict'){
+                // Another tab/device wrote a newer DB snapshot. Stop the local
+                // save and force a reload so we don't clobber that work with
+                // our stale state.
+                console.warn('[Storage] DB write rejected — server has newer snapshot. Reloading to resync.')
+                if(typeof window !== 'undefined' && window.location){
+                    alertStore.set({
+                        type: 'normal',
+                        msg: language.dbConflictReload ?? 'Server has newer data. Reloading to resync…'
+                    })
+                    setTimeout(() => location.reload(), 1500)
+                }
+                throw e
+            }
+            throw e
+        }
         return null
     }
     async getItem(key:string):Promise<Buffer> {

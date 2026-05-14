@@ -3,6 +3,12 @@ import { alertError, alertInput, waitAlert } from "../alert"
 import { base64url, getKeypairStore, saveKeypairStore } from "../util"
 
 
+// Cache of server-side mtime per storage key. Used to detect stale writes —
+// e.g. mobile pushing a truncated database.bin after the server already saved
+// a fresh recovery. Cleared per-page-load (in-memory only).
+const serverMtimeCache: Map<string, number> = new Map()
+const DB_FILE_KEY = 'database/database.bin'
+
 export class NodeStorage{
 
     authChecked = false
@@ -71,17 +77,40 @@ export class NodeStorage{
 
     async setItem(key:string, value:Uint8Array) {
         await this.checkAuth()
+        const headers: Record<string, string> = {
+            'content-type': 'application/octet-stream',
+            'file-path': Buffer.from(key, 'utf-8').toString('hex'),
+            'risu-auth': await this.createAuth()
+        }
+        // Stamp the snapshot mtime we last observed so the server can refuse
+        // a write prepared from stale data (only enforced for the main DB).
+        const cachedMtime = serverMtimeCache.get(key)
+        if(key === DB_FILE_KEY && cachedMtime !== undefined){
+            headers['if-match-mtime'] = String(cachedMtime)
+        }
         const da = await fetch('/api/write', {
             method: "POST",
             body: value as any,
-            headers: {
-                'content-type': 'application/octet-stream',
-                'file-path': Buffer.from(key, 'utf-8').toString('hex'),
-                'risu-auth': await this.createAuth()
-            }
+            headers,
         })
+        if(da.status === 409 && key === DB_FILE_KEY){
+            // Server has a newer snapshot — refuse and tell user to reload so
+            // we don't silently overwrite recovery work or another tab's edits.
+            const newMtime = parseInt(da.headers.get('x-server-mtime') || '0', 10)
+            if(newMtime > 0){
+                serverMtimeCache.set(key, newMtime)
+            }
+            const err: any = new Error('mtime_conflict')
+            err.code = 'mtime_conflict'
+            err.currentMtime = newMtime
+            throw err
+        }
         if(da.status < 200 || da.status >= 300){
             throw "setItem Error"
+        }
+        const newMtime = parseInt(da.headers.get('x-server-mtime') || '0', 10)
+        if(newMtime > 0){
+            serverMtimeCache.set(key, newMtime)
         }
         const data = await da.json()
         if(data.error){
@@ -99,6 +128,10 @@ export class NodeStorage{
         })
         if(da.status < 200 || da.status >= 300){
             throw "getItem Error"
+        }
+        const newMtime = parseInt(da.headers.get('x-server-mtime') || '0', 10)
+        if(newMtime > 0){
+            serverMtimeCache.set(key, newMtime)
         }
 
         const data = Buffer.from(await da.arrayBuffer())
