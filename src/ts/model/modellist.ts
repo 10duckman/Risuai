@@ -45,8 +45,11 @@ export const LLMModels: LLMModel[] = [
     ...AnthropicModels,
     // AWS Bedrock Claude models
     {
-        name: "Claude 4.7 Opus (Bedrock)",
+        // Legacy id kept for users who already selected this model. internalID
+        // pinned to global so the auto-detect fallback isn't relied on.
+        name: "Claude 4.7 Opus (Bedrock global)",
         id: 'anthropic.claude-opus-4-7',
+        internalID: 'global.anthropic.claude-opus-4-7',
         provider: LLMProvider.AWS,
         format: LLMFormat.AWSBedrockClaude,
         flags: [
@@ -58,8 +61,23 @@ export const LLMModels: LLMModel[] = [
         tokenizer: LLMTokenizer.Claude,
     },
     {
-        name: "Claude 4.6 Sonnet (Bedrock)",
+        name: "Claude 4.7 Opus (Bedrock us)",
+        id: 'anthropic.claude-opus-4-7-us',
+        internalID: 'us.anthropic.claude-opus-4-7',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
+        name: "Claude 4.6 Sonnet (Bedrock global)",
         id: 'anthropic.claude-sonnet-4-6',
+        internalID: 'global.anthropic.claude-sonnet-4-6',
         provider: LLMProvider.AWS,
         format: LLMFormat.AWSBedrockClaude,
         flags: [
@@ -73,12 +91,45 @@ export const LLMModels: LLMModel[] = [
         tokenizer: LLMTokenizer.Claude,
     },
     {
-        name: "Claude 4.6 Opus v1",
-        id: 'anthropic.claude-opus-4-6-v1',
+        name: "Claude 4.6 Sonnet (Bedrock us)",
+        id: 'anthropic.claude-sonnet-4-6-us',
+        internalID: 'us.anthropic.claude-sonnet-4-6',
         provider: LLMProvider.AWS,
         format: LLMFormat.AWSBedrockClaude,
         flags: [
-            LLMFlags.hasPrefill, // actually it doesn't, but leaving it for compatibility
+            LLMFlags.hasPrefill,
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeThinking,
+            LLMFlags.claudeAdaptiveThinking
+        ],
+        parameters: [...ClaudeParameters, 'thinking_tokens'],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
+        name: "Claude 4.6 Opus (Bedrock global)",
+        id: 'anthropic.claude-opus-4-6-v1',
+        internalID: 'global.anthropic.claude-opus-4-6-v1',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasPrefill,
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeThinking,
+            LLMFlags.claudeAdaptiveThinking
+        ],
+        parameters: [...ClaudeParameters, 'thinking_tokens'],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
+        name: "Claude 4.6 Opus (Bedrock us)",
+        id: 'anthropic.claude-opus-4-6-v1-us',
+        internalID: 'us.anthropic.claude-opus-4-6-v1',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasPrefill,
             LLMFlags.hasImageInput,
             LLMFlags.hasFirstSystemPrompt,
             LLMFlags.claudeThinking,

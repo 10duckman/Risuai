@@ -388,19 +388,24 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
     if(bedrock && aiModel !== 'reverse_proxy'){
         // ConverseStream mode: route through server gateway
         if(db.bedrockEndpointMode === 'converse-stream'){
-            // Apply us./global. prefix same as invoke mode
-            let useGlobal = false
+            // If internalID already has us./global. prefix, use as-is. Otherwise auto-detect.
             const rawModelId = arg.modelInfo.internalID
-            const datePart = Number(rawModelId.match(/(\d{8})/)?.[0])
-            const versionMatch = rawModelId.match(/claude-(?:opus-|sonnet-|haiku-)?(\d+)-(\d+)/)
-            if (datePart && !isNaN(datePart)) {
-                useGlobal = datePart >= 20250929
-            } else if (versionMatch) {
-                const majorVersion = Number(versionMatch[1])
-                const minorVersion = Number(versionMatch[2])
-                useGlobal = (majorVersion > 4) || (majorVersion === 4 && minorVersion >= 5)
+            let modelId: string
+            if (rawModelId.startsWith('us.') || rawModelId.startsWith('global.')) {
+                modelId = rawModelId
+            } else {
+                let useGlobal = false
+                const datePart = Number(rawModelId.match(/(\d{8})/)?.[0])
+                const versionMatch = rawModelId.match(/claude-(?:opus-|sonnet-|haiku-)?(\d+)-(\d+)/)
+                if (datePart && !isNaN(datePart)) {
+                    useGlobal = datePart >= 20250929
+                } else if (versionMatch) {
+                    const majorVersion = Number(versionMatch[1])
+                    const minorVersion = Number(versionMatch[2])
+                    useGlobal = (majorVersion > 4) || (majorVersion === 4 && minorVersion >= 5)
+                }
+                modelId = (useGlobal ? 'global.' : 'us.') + rawModelId
             }
-            const modelId = (useGlobal ? 'global.' : 'us.') + rawModelId
 
             // Convert Anthropic message format to Bedrock Converse format
             const cacheTtl = db.claude1HourCaching ? '1h' : '5m'
@@ -568,22 +573,23 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
         const stream = false;   // todo?
 
         // https://docs.claude.com/en/api/claude-on-amazon-bedrock#global-vs-regional-endpoints
-        let useGlobal = false;
-
-        const datePart = Number(arg.modelInfo.internalID.match(/(\d{8})/)?.[0]);
-        const versionMatch = arg.modelInfo.internalID.match(/claude-(?:opus-|sonnet-|haiku-)?(\d+)-(\d+)/);
-
-        if (datePart && !isNaN(datePart)) {
-            useGlobal = datePart >= 20250929;
-        } else if (versionMatch) {
-            const majorVersion = Number(versionMatch[1]);
-            const minorVersion = Number(versionMatch[2]);
-            useGlobal = (majorVersion > 4) || (majorVersion === 4 && minorVersion >= 5);
+        // If internalID already has us./global. prefix, use as-is. Otherwise auto-detect.
+        let awsModel: string;
+        if (arg.modelInfo.internalID.startsWith('us.') || arg.modelInfo.internalID.startsWith('global.')) {
+            awsModel = arg.modelInfo.internalID;
+        } else {
+            let useGlobal = false;
+            const datePart = Number(arg.modelInfo.internalID.match(/(\d{8})/)?.[0]);
+            const versionMatch = arg.modelInfo.internalID.match(/claude-(?:opus-|sonnet-|haiku-)?(\d+)-(\d+)/);
+            if (datePart && !isNaN(datePart)) {
+                useGlobal = datePart >= 20250929;
+            } else if (versionMatch) {
+                const majorVersion = Number(versionMatch[1]);
+                const minorVersion = Number(versionMatch[2]);
+                useGlobal = (majorVersion > 4) || (majorVersion === 4 && minorVersion >= 5);
+            }
+            awsModel = (useGlobal ? "global." : "us.") + arg.modelInfo.internalID;
         }
-
-        const awsModel = useGlobal
-            ? "global." + arg.modelInfo.internalID
-            : "us." + arg.modelInfo.internalID;
 
         const url = `https://${host}/model/${awsModel}/invoke${stream ? "-with-response-stream" : ""}`
 
