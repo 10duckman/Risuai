@@ -32,6 +32,7 @@ import { getModelInfo, LLMFlags } from "../model/modellist";
 import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
+import { isNodeServer } from "../platform";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -1525,6 +1526,47 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         return false
     }
     if(req.type === 'fail'){
+        // Even when the gateway POST itself failed, the Bedrock response might
+        // still complete on the server. Try to recover via /gateway/recover
+        // before giving up. Only do this for node server runtimes — desktop/web
+        // builds don't have the gateway endpoint.
+        if(isNodeServer && generationId){
+            try{
+                const { NodeStorage } = await import('../storage/nodeStorage')
+                const nodeStorage = new NodeStorage()
+                const auth = await nodeStorage.createAuth()
+                const deadline = Date.now() + 30000
+                while(Date.now() < deadline){
+                    const recoveryRes = await fetch(`/gateway/recover?chatId=${encodeURIComponent(generationId)}`, {
+                        headers: { 'risu-auth': auth }
+                    })
+                    if(recoveryRes.ok){
+                        const data = await recoveryRes.json()
+                        if(data.responseText && data.done){
+                            const msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length
+                            DBState.db.characters[selectedChar].chats[selectedChat].message.push({
+                                role: 'char',
+                                data: data.responseText,
+                                saying: currentChar.chaId,
+                                time: Date.now(),
+                                generationInfo,
+                                promptInfo,
+                                chatId: generationId,
+                            })
+                            DBState.db.characters[selectedChar].reloadKeys += 1
+                            console.log(`[Streaming] Recovered response from gateway after fail (length=${data.responseText.length})`)
+                            return true
+                        }
+                        if(data.done) break
+                    } else if(recoveryRes.status === 404){
+                        break
+                    }
+                    await new Promise(r => setTimeout(r, 1000))
+                }
+            } catch(e){
+                console.error('[Streaming] Post-fail recovery error:', e)
+            }
+        }
         throwError(req.result)
         return false
     }
@@ -1618,20 +1660,41 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             try{
                 const { NodeStorage } = await import('../storage/nodeStorage')
                 const nodeStorage = new NodeStorage()
-                const recoveryRes = await fetch(`/gateway/recover?chatId=${encodeURIComponent(generationId)}`, {
-                    headers: { 'risu-auth': await nodeStorage.createAuth() }
-                })
-                if(recoveryRes.ok){
-                    const recoveryData = await recoveryRes.json()
-                    if(recoveryData.responseText){
-                        result = recoveryData.responseText
-                        let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
-                        DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
-                        emoChanged = result2.emoChanged
-                        DBState.db.characters[selectedChar].reloadKeys += 1
-                        recovered = true
-                        console.log(`[Streaming] Recovered response from gateway (received=${result.length}, expected=${expectedLength})`)
+                const auth = await nodeStorage.createAuth()
+                // Poll until server marks the stream done or up to 30s. The Bedrock
+                // response is still being assembled when we reach here in race-loss
+                // cases — the in-memory buffer fills as tokens arrive.
+                const deadline = Date.now() + 30000
+                let attempt = 0
+                while(Date.now() < deadline){
+                    attempt++
+                    const recoveryRes = await fetch(`/gateway/recover?chatId=${encodeURIComponent(generationId)}`, {
+                        headers: { 'risu-auth': auth }
+                    })
+                    if(recoveryRes.ok){
+                        const recoveryData = await recoveryRes.json()
+                        const text = recoveryData.responseText || ''
+                        const done = !!recoveryData.done
+                        // Treat as recovered when the server says it's done, OR when
+                        // we have a longer body than what reached the client.
+                        if(text && (done || text.length > result.length)){
+                            result = text
+                            let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
+                            DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
+                            emoChanged = result2.emoChanged
+                            DBState.db.characters[selectedChar].reloadKeys += 1
+                            if(done){
+                                recovered = true
+                                console.log(`[Streaming] Recovered response from gateway (attempt=${attempt}, length=${result.length}, expected=${expectedLength})`)
+                                break
+                            }
+                        }
+                        if(done) break
+                    } else if(recoveryRes.status === 404 && attempt > 3){
+                        // Server has no record of this chatId after a few tries — give up.
+                        break
                     }
+                    await new Promise(r => setTimeout(r, 1000))
                 }
             }
             catch(recoveryErr){
