@@ -1327,8 +1327,9 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         });
 
         // Register stream buffer for recovery
-        if (chatId) {
-            activeStreams.set(chatId, { text: '', done: false, timestamp: Date.now() });
+        const streamEntry = chatId ? { text: '', done: false, timestamp: Date.now() } : null;
+        if (streamEntry) {
+            activeStreams.set(chatId, streamEntry);
         }
 
         const response = await client.send(command);
@@ -1348,7 +1349,10 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
                 const delta = event.contentBlockDelta.delta;
                 if (delta?.text) {
                     responseText += delta.text;
-                    if (chatId) activeStreams.get(chatId).text = responseText;
+                    if (streamEntry) {
+                        streamEntry.text = responseText;
+                        streamEntry.timestamp = Date.now();
+                    }
                     safeWrite(`data: ${JSON.stringify({
                         type: 'content_block_delta',
                         delta: { type: 'text_delta', text: delta.text }
@@ -1394,9 +1398,10 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         }
 
         // Mark stream as complete
-        if (chatId && activeStreams.has(chatId)) {
-            activeStreams.get(chatId).done = true;
-            activeStreams.get(chatId).text = responseText;
+        if (streamEntry) {
+            streamEntry.done = true;
+            streamEntry.text = responseText;
+            streamEntry.timestamp = Date.now();
         }
 
         clearInterval(heartbeat);
