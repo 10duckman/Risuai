@@ -33,6 +33,8 @@
     let modelInfo = $derived(getModelInfo(effectiveModel))
 
     let hasXHighEffort = $derived(modelInfo.flags.includes(LLMFlags.claudeXHighEffort))
+    let hasAdaptive = $derived(modelInfo.flags.includes(LLMFlags.claudeAdaptiveThinking))
+    let hasBudget = $derived(modelInfo.flags.includes(LLMFlags.claudeThinking))
 
     let adaptiveThinkingEffortOptions = $derived([
         { value: 'low', label: 'Low' },
@@ -46,14 +48,23 @@
         if (value.adaptive_thinking_effort === 'xhigh' && !hasXHighEffort) {
             value.adaptive_thinking_effort = 'high'
         }
+        // Demote stale adaptive selection when the model no longer supports it
+        // (e.g. switched from 4.7 → 4.6). Falls back to budget when available.
+        if (value.thinking_type === 'adaptive' && !hasAdaptive) {
+            value.thinking_type = hasBudget ? 'budget' : 'off'
+        }
     })
 </script>
 
 <span class="text-textcolor">{language.thinkingType ?? 'Thinking Mode'}</span>
 <SelectInput bind:value={value.thinking_type}>
     <OptionInput value="off">Off</OptionInput>
-    <OptionInput value="budget">Budget (Manual Tokens)</OptionInput>
-    <OptionInput value="adaptive">Adaptive</OptionInput>
+    {#if hasBudget}
+        <OptionInput value="budget">Budget (Manual Tokens)</OptionInput>
+    {/if}
+    {#if hasAdaptive}
+        <OptionInput value="adaptive">Adaptive</OptionInput>
+    {/if}
 </SelectInput>
 {#if value.thinking_type === 'budget'}
     <span class="text-textcolor">{language.thinkingTokens}</span>

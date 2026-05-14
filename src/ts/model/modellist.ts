@@ -86,8 +86,7 @@ export const LLMModels: LLMModel[] = [
             LLMFlags.hasPrefill,
             LLMFlags.hasImageInput,
             LLMFlags.hasFirstSystemPrompt,
-            LLMFlags.claudeThinking,
-            LLMFlags.claudeAdaptiveThinking
+            LLMFlags.claudeThinking
         ],
         parameters: [...ClaudeParameters, 'thinking_tokens'],
         tokenizer: LLMTokenizer.Claude,
@@ -102,8 +101,7 @@ export const LLMModels: LLMModel[] = [
             LLMFlags.hasPrefill,
             LLMFlags.hasImageInput,
             LLMFlags.hasFirstSystemPrompt,
-            LLMFlags.claudeThinking,
-            LLMFlags.claudeAdaptiveThinking
+            LLMFlags.claudeThinking
         ],
         parameters: [...ClaudeParameters, 'thinking_tokens'],
         tokenizer: LLMTokenizer.Claude,
@@ -118,8 +116,7 @@ export const LLMModels: LLMModel[] = [
             LLMFlags.hasPrefill,
             LLMFlags.hasImageInput,
             LLMFlags.hasFirstSystemPrompt,
-            LLMFlags.claudeThinking,
-            LLMFlags.claudeAdaptiveThinking
+            LLMFlags.claudeThinking
         ],
         parameters: [...ClaudeParameters, 'thinking_tokens'],
         tokenizer: LLMTokenizer.Claude,
@@ -134,8 +131,7 @@ export const LLMModels: LLMModel[] = [
             LLMFlags.hasPrefill,
             LLMFlags.hasImageInput,
             LLMFlags.hasFirstSystemPrompt,
-            LLMFlags.claudeThinking,
-            LLMFlags.claudeAdaptiveThinking
+            LLMFlags.claudeThinking
         ],
         parameters: [...ClaudeParameters, 'thinking_tokens'],
         tokenizer: LLMTokenizer.Claude,
