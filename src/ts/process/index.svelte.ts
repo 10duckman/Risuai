@@ -1606,7 +1606,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
         // Check if response is incomplete by comparing with gateway's expected length
         const expectedLength = parseInt(lastResponseChunk?.['__expectedLength'] ?? '-1')
-        const needsRecovery = streamError || !result || (expectedLength > 0 && result.length < expectedLength)
+        const streamComplete = lastResponseChunk?.['__streamComplete'] === 'true'
+        const isGatewayStream = '__streamComplete' in lastResponseChunk
+        const needsRecovery = streamError
+            || !result
+            || (expectedLength > 0 && result.length < expectedLength)
+            || (isGatewayStream && !streamComplete)
 
         if(needsRecovery){
             let recovered = false

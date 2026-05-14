@@ -24,6 +24,7 @@ COPY . .
 # Install including dev deps
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --no-frozen-lockfile
 ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV VITE_RISU_LEGAL_CONFIGURED=TRUE
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm build
 
 # ------------------------------------------------------------------------------------------
