@@ -55,7 +55,8 @@ export const LLMModels: LLMModel[] = [
         flags: [
             LLMFlags.hasImageInput,
             LLMFlags.hasFirstSystemPrompt,
-            LLMFlags.claudeAdaptiveThinking
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort
         ],
         parameters: [],
         tokenizer: LLMTokenizer.Claude,
@@ -69,7 +70,8 @@ export const LLMModels: LLMModel[] = [
         flags: [
             LLMFlags.hasImageInput,
             LLMFlags.hasFirstSystemPrompt,
-            LLMFlags.claudeAdaptiveThinking
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort
         ],
         parameters: [],
         tokenizer: LLMTokenizer.Claude,
