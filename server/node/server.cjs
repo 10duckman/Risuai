@@ -1425,6 +1425,9 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         // owning connection. Replay what we have, then either follow live new
         // events (still attached) or close out if the stream is done.
         if (resumeFromSeq >= 0 || (streamEntry && streamEntry.ownerStarted)) {
+            const buffered = streamEntry ? streamEntry.events.length : 0;
+            const replaying = streamEntry ? streamEntry.events.filter(e => e.seq > resumeFromSeq).length : 0;
+            console.log(`[Gateway] Resume attach: chatId=${chatId} resumeFromSeq=${resumeFromSeq} buffered=${buffered} replaying=${replaying} done=${streamEntry?.done}`);
             replayMissedEvents();
             if (streamEntry && streamEntry.done) {
                 clearInterval(heartbeat);
