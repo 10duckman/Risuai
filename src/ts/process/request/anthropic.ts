@@ -502,10 +502,30 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
                         const reader = response.body!.getReader()
                         let buffer = ''
                         const decoder = new TextDecoder()
+                        // Idle timeout: if we don't see any byte (including the 10s
+                        // server heartbeat) for this long, treat the connection as
+                        // dead and resume. Chrome's offline toggle leaves in-flight
+                        // fetches hanging indefinitely instead of erroring, so we
+                        // can't rely on reader.read() throwing.
+                        const IDLE_MS = 25000
                         try{
                             while(true){
                                 if(arg?.abortSignal?.aborted) return { closedCleanly: true }
-                                const {done, value} = await reader.read()
+                                let timeoutId: any
+                                const idle = new Promise<'idle'>(resolve => {
+                                    timeoutId = setTimeout(() => resolve('idle'), IDLE_MS)
+                                })
+                                const readResult = await Promise.race([
+                                    reader.read().then(r => ({ kind: 'read' as const, r })),
+                                    idle.then(() => ({ kind: 'idle' as const, r: null })),
+                                ])
+                                clearTimeout(timeoutId)
+                                if(readResult.kind === 'idle'){
+                                    console.warn('[Gateway SSE] Idle timeout — assuming connection dropped')
+                                    try { await reader.cancel() } catch(e) {}
+                                    return { closedCleanly: false }
+                                }
+                                const { done, value } = readResult.r!
                                 if(done) return { closedCleanly: true }
 
                                 buffer += decoder.decode(value, {stream: true})
