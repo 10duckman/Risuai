@@ -1313,10 +1313,14 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             catch (e) { clientDisconnected = true; return false; }
         };
 
-        // Heartbeat to prevent iOS WebKit 60s timeout
+        // Heartbeat to prevent iOS WebKit 60s timeout. Sent as a real SSE data
+        // event (not a comment) because iOS Safari doesn't reset its idle
+        // timer on `:comment\n\n` lines — only on actual `data:` payloads.
+        // The client parser ignores type==='heartbeat'. 10s cadence keeps us
+        // well under the 60s ceiling even with two missed beats.
         const heartbeat = setInterval(() => {
-            safeWrite(':heartbeat\n\n');
-        }, 15000);
+            safeWrite(`data: ${JSON.stringify({ type: 'heartbeat', t: Date.now() })}\n\n`);
+        }, 10000);
 
         // Track client disconnect
         let clientDisconnected = false;
