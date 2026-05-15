@@ -461,81 +461,140 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             }
             gatewayHeaders['x-cache-ttl'] = db.claude1HourCaching ? '1h' : '5m'
 
-            const res = await fetch('/gateway/bedrock-stream', {
-                method: 'POST',
-                headers: gatewayHeaders,
-                body: JSON.stringify(gatewayBody),
-                signal: arg.abortSignal,
-            })
+            // First fetch to start the Bedrock stream. Resumes (after a drop)
+            // hit the same endpoint with a Last-Event-ID header — the server
+            // detects that and replays from the buffer instead of starting a
+            // new Bedrock call.
+            const openConnection = async (lastEventId: string | null): Promise<Response> => {
+                const headers: {[key:string]:string} = { ...gatewayHeaders }
+                if(lastEventId){
+                    headers['last-event-id'] = lastEventId
+                }
+                return await fetch('/gateway/bedrock-stream', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(gatewayBody),
+                    signal: arg.abortSignal,
+                })
+            }
 
-            if(res.status !== 200){
+            const initialRes = await openConnection(null)
+            if(initialRes.status !== 200){
                 return {
                     type: 'fail',
-                    result: await res.text()
+                    result: await initialRes.text()
                 }
             }
 
-            // SSE parser — same logic as requestClaudeHTTP but inline
+            // SSE parser — supports Last-Event-ID resume across connection drops.
+            const MAX_RESUME_ATTEMPTS = 3
             let thinking = false
             const stream = new ReadableStream<StreamResponseChunk>({
                 async start(controller){
                     let text = ''
                     let expectedLength = -1
                     let streamComplete = false
-                    const reader = res.body.getReader()
-                    let buffer = ''
-                    const decoder = new TextDecoder()
+                    let lastEventId: string | null = null
+                    let resumeAttempts = 0
+                    let currentRes: Response = initialRes
 
-                    try{
-                        while(true){
-                            if(arg?.abortSignal?.aborted) break
-                            const {done, value} = await reader.read()
-                            if(done) break
+                    const consumeOnce = async (response: Response): Promise<{ closedCleanly: boolean }> => {
+                        const reader = response.body!.getReader()
+                        let buffer = ''
+                        const decoder = new TextDecoder()
+                        try{
+                            while(true){
+                                if(arg?.abortSignal?.aborted) return { closedCleanly: true }
+                                const {done, value} = await reader.read()
+                                if(done) return { closedCleanly: true }
 
-                            buffer += decoder.decode(value, {stream: true})
+                                buffer += decoder.decode(value, {stream: true})
 
-                            // Process complete lines only
-                            let newlineIdx
-                            while((newlineIdx = buffer.indexOf('\n')) !== -1){
-                                const line = buffer.slice(0, newlineIdx)
-                                buffer = buffer.slice(newlineIdx + 1)
+                                let newlineIdx
+                                while((newlineIdx = buffer.indexOf('\n')) !== -1){
+                                    const line = buffer.slice(0, newlineIdx)
+                                    buffer = buffer.slice(newlineIdx + 1)
 
-                                if(line.startsWith('data: ')){
-                                    try {
-                                        const parsed = JSON.parse(line.slice(6))
-                                        if(parsed?.type === 'content_block_delta'){
-                                            if(parsed?.delta?.type === 'text_delta'){
-                                                if(thinking){ text += "</Thoughts>\n\n"; thinking = false }
-                                                text += parsed.delta?.text ?? ''
+                                    if(line.startsWith('id: ')){
+                                        // Track last seen event id so a resume after a drop
+                                        // can ask the server to skip what we already have.
+                                        lastEventId = line.slice(4).trim()
+                                        continue
+                                    }
+                                    if(line.startsWith('data: ')){
+                                        try {
+                                            const parsed = JSON.parse(line.slice(6))
+                                            if(parsed?.type === 'heartbeat') continue
+                                            if(parsed?.type === 'content_block_delta'){
+                                                if(parsed?.delta?.type === 'text_delta'){
+                                                    if(thinking){ text += "</Thoughts>\n\n"; thinking = false }
+                                                    text += parsed.delta?.text ?? ''
+                                                }
+                                                if(parsed?.delta?.type === 'thinking_delta'){
+                                                    if(!thinking){ text += "<Thoughts>\n"; thinking = true }
+                                                    text += parsed.delta?.thinking ?? ''
+                                                }
                                             }
-                                            if(parsed?.delta?.type === 'thinking_delta'){
-                                                if(!thinking){ text += "<Thoughts>\n"; thinking = true }
-                                                text += parsed.delta?.thinking ?? ''
-                                            }
-                                        }
-                                        if(parsed?.type === 'message_delta' && parsed?.responseLength != null){
-                                            expectedLength = parsed.responseLength
-                                        }
-                                        if(parsed?.type === 'stream_complete'){
-                                            streamComplete = true
-                                            if(parsed?.responseLength != null){
+                                            if(parsed?.type === 'message_delta' && parsed?.responseLength != null){
                                                 expectedLength = parsed.responseLength
                                             }
-                                        }
-                                        if(parsed?.type === 'error'){
-                                            text += "Error:" + parsed?.error?.message
-                                        }
-                                    } catch(e) {}
+                                            if(parsed?.type === 'stream_complete'){
+                                                streamComplete = true
+                                                if(parsed?.responseLength != null){
+                                                    expectedLength = parsed.responseLength
+                                                }
+                                            }
+                                            if(parsed?.type === 'error'){
+                                                text += "Error:" + parsed?.error?.message
+                                            }
+                                        } catch(e) {}
+                                    }
+                                }
+
+                                if(text){
+                                    controller.enqueue({"0": text})
                                 }
                             }
-
-                            if(text){
-                                controller.enqueue({"0": text})
-                            }
+                        }
+                        catch(e){
+                            console.error('[Gateway SSE] Stream read error:', e)
+                            return { closedCleanly: false }
+                        }
+                        finally {
+                            try { reader.releaseLock() } catch(e) {}
                         }
                     }
-                    catch(e){
-                        console.error('[Gateway SSE] Stream read error:', e)
+
+                    // Loop: read; if the connection drops before stream_complete,
+                    // re-open with Last-Event-ID and pick up where we left off.
+                    while(true){
+                        const result = await consumeOnce(currentRes)
+                        if(arg?.abortSignal?.aborted) break
+                        if(streamComplete) break
+                        // Connection ended — either cleanly without stream_complete
+                        // (server done but flag missed) or due to a network drop.
+                        // Either way try to resume; if the server already finished,
+                        // it'll replay any tail events including stream_complete.
+                        if(arg.chatId && lastEventId && resumeAttempts < MAX_RESUME_ATTEMPTS){
+                            resumeAttempts++
+                            console.log(`[Gateway SSE] Resuming after drop (attempt=${resumeAttempts}, lastEventId=${lastEventId})`)
+                            try {
+                                const r = await openConnection(lastEventId)
+                                if(r.status !== 200){
+                                    console.warn(`[Gateway SSE] Resume failed with status ${r.status}`)
+                                    break
+                                }
+                                currentRes = r
+                                continue
+                            } catch(e) {
+                                console.warn('[Gateway SSE] Resume fetch threw:', e)
+                                // Brief backoff before next attempt; fall through to break
+                                // if we've exhausted attempts above.
+                                await new Promise(r => setTimeout(r, 500))
+                                if(resumeAttempts < MAX_RESUME_ATTEMPTS) continue
+                            }
+                        }
+                        break
                     }
 
                     if(thinking){ text += "</Thoughts>\n\n" }

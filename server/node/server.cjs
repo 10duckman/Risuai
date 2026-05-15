@@ -1197,8 +1197,15 @@ app.options('/gateway/bedrock-stream', (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, risu-auth, x-chat-id, x-cache-ttl');
     res.status(204).end();
 });
-// In-memory stream buffer for recovery after client disconnect
-const activeStreams = new Map(); // chatId → { text, done, timestamp }
+// In-memory stream buffer for recovery after client disconnect.
+// Each chatId entry keeps the running text (used by /gateway/recover) and a
+// seq-numbered event log (used by Last-Event-ID resume). Events are the same
+// SSE payload bytes the original connection emitted, so a resuming client can
+// just replay them without any extra parsing on the server.
+//   events: [{ seq, data }]   — `data` is the full SSE payload string
+//   nextSeq: number           — monotonically increasing seq for new events
+//   waiters: Set<fn>          — listeners waiting for new events (for resume)
+const activeStreams = new Map();
 const STREAM_TTL = 30 * 60 * 1000; // 30 minutes
 setInterval(() => {
     const now = Date.now();
@@ -1207,11 +1214,26 @@ setInterval(() => {
     }
 }, 60 * 1000);
 
+// Notify any resume-waiters that new events are available for this chatId.
+function notifyStreamWaiters(entry) {
+    if (!entry || !entry.waiters || entry.waiters.size === 0) return;
+    const fns = Array.from(entry.waiters);
+    entry.waiters.clear();
+    for (const fn of fns) {
+        try { fn(); } catch (e) {}
+    }
+}
+
 app.post('/gateway/bedrock-stream', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     if (!await checkAuth(req, res)) {
         return;
     }
+
+    // Hoisted so the catch block can reach them (used to broadcast errors to
+    // every attached resume-client, not just this connection).
+    let streamEntry = null;
+    let emitEvent = null;
 
     try {
         const { modelId, messages, system, inferenceConfig, bearerToken: clientBearerToken, thinking: thinkingConfig, thinkingEffort } = req.body;
@@ -1298,44 +1320,130 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             }
         }
 
-        const command = new ConverseStreamCommand(commandParams);
-
         // SSE headers
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
 
-        // Safe write helper — silently absorbs write errors on closed connections
-        const safeWrite = (data) => {
-            if (clientDisconnected || res.destroyed) return false;
-            try { return res.write(data); }
-            catch (e) { clientDisconnected = true; return false; }
+        // Track this client's connection state
+        let clientDisconnected = false;
+        res.on('error', () => { clientDisconnected = true; });
+
+        // ----- Resume support (Last-Event-ID) -----
+        // We attach this connection to a chatId-keyed buffer. New events get a
+        // monotonic seq, get pushed to the buffer, and are written to every
+        // attached connection. If the original connection drops mid-stream and
+        // a new one comes back with `Last-Event-ID: <chatId>:<seq>`, we replay
+        // the missing events from the buffer then keep the new connection
+        // attached so it picks up subsequent live events. Bedrock keeps
+        // streaming server-side regardless of whether any client is attached.
+        if (chatId) {
+            streamEntry = activeStreams.get(chatId);
+            if (!streamEntry) {
+                streamEntry = {
+                    text: '',
+                    done: false,
+                    timestamp: Date.now(),
+                    events: [],
+                    nextSeq: 0,
+                    attachedRes: new Set(),
+                    ownerStarted: false,
+                };
+                activeStreams.set(chatId, streamEntry);
+            }
+            streamEntry.attachedRes.add(res);
+        }
+
+        // Parse Last-Event-ID. Header format: "<chatId>:<seq>". Returns the
+        // last seq the client successfully received, or -1 if absent / mismatched.
+        const lastEventIdHeader = req.headers['last-event-id'];
+        let resumeFromSeq = -1;
+        if (chatId && lastEventIdHeader && streamEntry) {
+            const parts = String(lastEventIdHeader).split(':');
+            if (parts[0] === chatId) {
+                const n = parseInt(parts[1], 10);
+                if (!isNaN(n)) resumeFromSeq = n;
+            }
+        }
+
+        // Replay buffered events strictly after the client's last-seen seq.
+        const replayMissedEvents = () => {
+            if (!streamEntry) return;
+            for (const ev of streamEntry.events) {
+                if (ev.seq > resumeFromSeq) {
+                    if (clientDisconnected || res.destroyed) return;
+                    try { res.write(`id: ${chatId}:${ev.seq}\n${ev.data}`); }
+                    catch (e) { clientDisconnected = true; return; }
+                }
+            }
+        };
+
+        // Helper: emit a new SSE payload. Pushes to the buffer (when chatId is
+        // known) and writes to every attached connection. Payload should be
+        // the body string, ending with '\n\n', e.g. `data: {...}\n\n`.
+        emitEvent = (payload) => {
+            if (streamEntry) {
+                const seq = streamEntry.nextSeq++;
+                streamEntry.events.push({ seq, data: payload });
+                streamEntry.timestamp = Date.now();
+                const idLine = `id: ${chatId}:${seq}\n`;
+                for (const r of streamEntry.attachedRes) {
+                    if (r.destroyed) continue;
+                    try { r.write(idLine + payload); } catch (e) {}
+                }
+                notifyStreamWaiters(streamEntry);
+            } else {
+                if (!clientDisconnected && !res.destroyed) {
+                    try { res.write(payload); } catch (e) { clientDisconnected = true; }
+                }
+            }
         };
 
         // Heartbeat to prevent iOS WebKit 60s timeout. Sent as a real SSE data
         // event (not a comment) because iOS Safari doesn't reset its idle
         // timer on `:comment\n\n` lines — only on actual `data:` payloads.
         // The client parser ignores type==='heartbeat'. 10s cadence keeps us
-        // well under the 60s ceiling even with two missed beats.
+        // well under the 60s ceiling even with two missed beats. We send the
+        // heartbeat directly to this connection (not via emitEvent) so it
+        // doesn't bloat the resume buffer.
         const heartbeat = setInterval(() => {
-            safeWrite(`data: ${JSON.stringify({ type: 'heartbeat', t: Date.now() })}\n\n`);
+            if (clientDisconnected || res.destroyed) return;
+            try { res.write(`data: ${JSON.stringify({ type: 'heartbeat', t: Date.now() })}\n\n`); }
+            catch (e) { clientDisconnected = true; }
         }, 10000);
 
-        // Track client disconnect
-        let clientDisconnected = false;
-        res.on('error', () => { clientDisconnected = true; });
         req.on('close', () => {
             clearInterval(heartbeat);
             clientDisconnected = true;
+            if (streamEntry) {
+                streamEntry.attachedRes.delete(res);
+            }
         });
 
-        // Register stream buffer for recovery
-        const streamEntry = chatId ? { text: '', done: false, timestamp: Date.now() } : null;
-        if (streamEntry) {
-            activeStreams.set(chatId, streamEntry);
+        // Resume path: the Bedrock call is already running (or finished) on the
+        // owning connection. Replay what we have, then either follow live new
+        // events (still attached) or close out if the stream is done.
+        if (resumeFromSeq >= 0 || (streamEntry && streamEntry.ownerStarted)) {
+            replayMissedEvents();
+            if (streamEntry && streamEntry.done) {
+                clearInterval(heartbeat);
+                if (!clientDisconnected) res.end();
+                if (streamEntry) streamEntry.attachedRes.delete(res);
+            }
+            // Otherwise leave the connection attached; emitEvent will deliver
+            // future events as the owner pumps Bedrock's stream.
+            return;
         }
 
+        // ----- Owner path: this is the first connection for this chatId. -----
+        // We're responsible for actually calling Bedrock and pumping its
+        // events through emitEvent.
+        if (streamEntry) {
+            streamEntry.ownerStarted = true;
+        }
+
+        const command = new ConverseStreamCommand(commandParams);
         const response = await client.send(command);
 
         let thinking = false;
@@ -1344,7 +1452,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             if (event.contentBlockStart) {
                 const block = event.contentBlockStart.start;
                 if (block?.toolUse) {
-                    safeWrite(`data: ${JSON.stringify({
+                    emitEvent(`data: ${JSON.stringify({
                         type: 'content_block_start',
                         content_block: { type: 'tool_use', id: block.toolUse.toolUseId, name: block.toolUse.name }
                     })}\n\n`);
@@ -1355,25 +1463,24 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
                     responseText += delta.text;
                     if (streamEntry) {
                         streamEntry.text = responseText;
-                        streamEntry.timestamp = Date.now();
                     }
-                    safeWrite(`data: ${JSON.stringify({
+                    emitEvent(`data: ${JSON.stringify({
                         type: 'content_block_delta',
                         delta: { type: 'text_delta', text: delta.text }
                     })}\n\n`);
                 } else if (delta?.reasoningContent?.text) {
-                    safeWrite(`data: ${JSON.stringify({
+                    emitEvent(`data: ${JSON.stringify({
                         type: 'content_block_delta',
                         delta: { type: 'thinking_delta', thinking: delta.reasoningContent.text }
                     })}\n\n`);
                 } else if (delta?.toolUse) {
-                    safeWrite(`data: ${JSON.stringify({
+                    emitEvent(`data: ${JSON.stringify({
                         type: 'content_block_delta',
                         delta: { type: 'input_json_delta', partial_json: delta.toolUse.input }
                     })}\n\n`);
                 }
             } else if (event.messageStop) {
-                safeWrite(`data: ${JSON.stringify({
+                emitEvent(`data: ${JSON.stringify({
                     type: 'message_stop'
                 })}\n\n`);
             } else if (event.metadata) {
@@ -1383,7 +1490,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
                     const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
                     fs.writeFile(path.join(logDir, `${logId}_res.json`), JSON.stringify({ usage, responseText, chatId, timestamp: new Date().toISOString() }, null, 2)).catch(() => {});
                 }
-                safeWrite(`data: ${JSON.stringify({
+                emitEvent(`data: ${JSON.stringify({
                     type: 'message_delta',
                     usage: usage,
                     responseLength: responseText.length
@@ -1392,36 +1499,51 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         }
 
         // Send explicit stream completion marker before ending
-        safeWrite(`data: ${JSON.stringify({
+        emitEvent(`data: ${JSON.stringify({
             type: 'stream_complete',
             responseLength: responseText.length
         })}\n\n`);
 
-        if (clientDisconnected) {
-            console.log(`[Gateway] Client disconnected during stream, response saved (${responseText.length} chars). chatId=${chatId}`);
-        }
-
-        // Mark stream as complete
+        // Mark stream as complete and close every attached connection.
         if (streamEntry) {
             streamEntry.done = true;
             streamEntry.text = responseText;
             streamEntry.timestamp = Date.now();
+            for (const r of streamEntry.attachedRes) {
+                if (!r.destroyed) {
+                    try { r.end(); } catch (e) {}
+                }
+            }
+            streamEntry.attachedRes.clear();
         }
 
         clearInterval(heartbeat);
-        if (!clientDisconnected) res.end();
+        if (!clientDisconnected && !res.writableEnded) res.end();
     } catch (err) {
         console.error(`[Gateway] Bedrock error:`, err.message || err);
-        // If headers already sent, send error via SSE
+        // If headers already sent, broadcast the error so any attached client
+        // (and any future resumer) sees it instead of timing out.
         if (res.headersSent) {
+            const payload = `data: ${JSON.stringify({
+                type: 'error',
+                error: { message: err.message || 'Bedrock ConverseStream error' }
+            })}\n\n`;
             try {
-                if (!res.destroyed) {
-                    res.write(`data: ${JSON.stringify({
-                        type: 'error',
-                        error: { message: err.message || 'Bedrock ConverseStream error' }
-                    })}\n\n`);
+                if (emitEvent) {
+                    emitEvent(payload);
+                } else if (!res.destroyed) {
+                    res.write(payload);
                 }
             } catch (e) {}
+            // Mark done + close attached connections so clients stop waiting.
+            if (streamEntry) {
+                streamEntry.done = true;
+                streamEntry.timestamp = Date.now();
+                for (const r of streamEntry.attachedRes) {
+                    if (!r.destroyed) { try { r.end(); } catch (e) {} }
+                }
+                streamEntry.attachedRes.clear();
+            }
             try { res.end(); } catch(e) {}
         } else {
             res.status(500).json({ error: err.message || 'Bedrock ConverseStream error' });
