@@ -14,9 +14,14 @@ import type { OobaChatCompletionRequestParams } from '../model/ooba';
 import { type HypaV3Settings, type HypaV3Preset, createHypaV3Preset } from '../process/memory/hypav3'
 import { isTauri, isNodeServer } from "src/ts/platform"
 import { safeStructuredClone } from '../polyfill';
+import {
+    DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES,
+    DEFAULT_CHAT_LOAD_INITIAL_PAGES,
+    normalizeChatLoadPages,
+} from '../chatLoadPages';
 
 //APP_VERSION_POINT is to locate the app version in the database file for version bumping
-export let appVer = "2026.2.291" //<APP_VERSION_POINT>
+export let appVer = "2026.6.214" //<APP_VERSION_POINT>
 export let webAppSubVer = ''
 
 
@@ -154,6 +159,9 @@ export function setDatabase(data:Database){
     }
     if(checkNullish(data.botPresetsId)){
         data.botPresetsId = 0
+    }
+    if(Array.isArray(data.promptTemplate)){
+        data.promptTemplate = normalizePromptTemplate(data.promptTemplate)
     }
     if(checkNullish(data.sdProvider)){
         data.sdProvider = ''
@@ -457,6 +465,9 @@ export function setDatabase(data:Database){
     }
     if (data.botPresets) {
         for (const preset of data.botPresets) {
+            if(Array.isArray(preset.promptTemplate)){
+                preset.promptTemplate = normalizePromptTemplate(preset.promptTemplate)
+            }
             preset.localNetworkMode ??= false
             preset.localNetworkTimeoutSec ??= 600
             if (typeof preset.localNetworkMode !== 'boolean') {
@@ -552,6 +563,7 @@ export function setDatabase(data:Database){
     data.showPromptComparison ??= false
     data.OaiCompAPIKeys ??= {}
     data.reasoningEffort ??= 0
+    data.verbosity ??= 1
     data.hypaV3Presets ??= [
         createHypaV3Preset("Default", {
             summarizationPrompt: data.supaMemoryPrompt ? data.supaMemoryPrompt : "",
@@ -620,6 +632,7 @@ export function setDatabase(data:Database){
     }
     data.customModels ??= []
     data.authRefreshes ??= []
+    data.openAIFlexProcessing ??= false
     data.rememberToolUsage ??= true
     data.simplifiedToolUse ??= false
     data.streamGeminiThoughts ??= false
@@ -648,6 +661,8 @@ export function setDatabase(data:Database){
     data.autoScrollToNewMessage ??= true
     data.alwaysScrollToNewMessage ??= false
     data.newMessageButtonStyle ??= 'bottom-center'
+    data.chatLoadInitialPages = normalizeChatLoadPages(data.chatLoadInitialPages, DEFAULT_CHAT_LOAD_INITIAL_PAGES)
+    data.chatLoadAdditionalPages = normalizeChatLoadPages(data.chatLoadAdditionalPages, DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES)
     data.echoMessage ??= "Echo Message"
     data.echoDelay ??= 0
     if(!isNodeServer && !isTauri){
@@ -664,6 +679,12 @@ export function setDatabase(data:Database){
     // Because its likely they are power users who would benefit from the features
     data.enableRisuaiProTools ??= data.plugins.length > 0
     data.keepSessionAlive ??= 'off'
+    data.loadouts ??= []
+    data.longPressToPopupEditor ??= false
+    data.customSidebarItems ??= []
+    data.moveInsteadOfCopyOnCMPConvert ??= false
+    data.skipSavingAssetsOnWebSync ??= true
+    data.coldstorage ??= data?.plugins?.length === 0
     changeLanguage(data.language)
     setDatabaseLite(data)
 }
@@ -734,6 +755,16 @@ export interface DynamicOutput {
     dynamicOutputPrompt: boolean
     showTypingEffect: boolean
     dynamicRequest: boolean
+}
+
+export interface RisuPersona {
+    personaPrompt:string
+    name:string
+    icon:string
+    largePortrait?:boolean
+    id?:string
+    note?:string
+    embeddedModule?:RisuModule
 }
 
 export interface Database{
@@ -882,14 +913,7 @@ export interface Database{
     openrouterMiddleOut:boolean
     openrouterFallback:boolean
     selectedPersona:number
-    personas:{
-        personaPrompt:string
-        name:string
-        icon:string
-        largePortrait?:boolean
-        id?:string
-        note?:string
-    }[]
+    personas:RisuPersona[]
     personaNote:boolean
     assetWidth:number
     animationSpeed:number
@@ -954,6 +978,7 @@ export interface Database{
     sideMenuRerollButton?:boolean
     requestInfoInsideChat?:boolean
     additionalParams:[string, string][]
+    applyAdditionalParamsToAll:boolean
     heightMode:string
     noWaitForTranslate:boolean
     antiClaudeOverload:boolean
@@ -1134,6 +1159,7 @@ export interface Database{
     }[]
     promptInfoInsideChat:boolean
     promptTextInfoInsideChat:boolean
+    openAIFlexProcessing:boolean
     claudeBatching:boolean
     claude1HourCaching:boolean
     bedrockEndpointMode:'invoke'|'converse-stream'
@@ -1176,6 +1202,8 @@ export interface Database{
     autoScrollToNewMessage?: boolean
     alwaysScrollToNewMessage?: boolean
     newMessageButtonStyle?: string
+    chatLoadInitialPages?: number
+    chatLoadAdditionalPages?: number
     pluginDevelopMode?: boolean
     echoMessage?:string
     echoDelay?:number
@@ -1190,6 +1218,20 @@ export interface Database{
     disableSeperateParameterChangeOnPresetChange?:boolean
     saveSignatures?:boolean
     keepSessionAlive: 'off' | 'pip' | 'sound'
+    longPressToPopupEditor?: boolean
+    loadouts: Loadout[]
+    disableAprilFools?:boolean
+    customSidebarItems: CustomSideBarItem[]
+    lastLoadedLoadoutName: string
+    moveInsteadOfCopyOnCMPConvert?:boolean
+    skipSavingAssetsOnWebSync?:boolean
+}
+
+export interface CustomSideBarItem{
+    id: string
+    type: 'model'|'databaseKey'|'loadout'|'persona'|'preset'|'setting'
+    subType: string
+    label: string
 }
 
 export interface SeparateParameters{
@@ -1383,6 +1425,9 @@ export interface character{
     prebuiltAssetStyle?:string
     prebuiltAssetExclude?:string[]
     modules?:string[]
+    coldstorage?:string
+    coldStoragedChats?:string[]
+    customModuleToggle?:string
 }
 
 
@@ -1947,7 +1992,7 @@ export function saveCurrentPreset(){
         proxyRequestModel: db.proxyRequestModel,
         openrouterRequestModel: db.openrouterRequestModel,
         NAISettings: safeStructuredClone(db.NAIsettings),
-        promptTemplate: db.promptTemplate ?? null,
+        promptTemplate: normalizePromptTemplate(db.promptTemplate) ?? null,
         NAIadventure: db.NAIadventure ?? false,
         NAIappendName: db.NAIappendName ?? false,
         localStopStrings: db.localStopStrings,
@@ -2063,7 +2108,7 @@ export function setPreset(db:Database, newPres: botPreset){
     db.autoSuggestPrompt = newPres.autoSuggestPrompt ?? db.autoSuggestPrompt
     db.autoSuggestPrefix = newPres.autoSuggestPrefix ?? db.autoSuggestPrefix
     db.autoSuggestClean = newPres.autoSuggestClean ?? db.autoSuggestClean
-    db.promptTemplate = newPres.promptTemplate
+    db.promptTemplate = normalizePromptTemplate(newPres.promptTemplate)
     db.NAIadventure = newPres.NAIadventure
     db.NAIappendName = newPres.NAIappendName
     db.NAIsettings.cfg_scale ??= 1
@@ -2150,6 +2195,7 @@ export function setPreset(db:Database, newPres: botPreset){
     return db
 }
 
+import type { Loadout } from '../loadout';
 import { encode as encodeMsgpack, decode as decodeMsgpack } from "msgpackr/index-no-eval";
 import * as fflate from "fflate";
 import type { OnnxModelFiles } from '../process/transformers';
@@ -2238,7 +2284,10 @@ export async function importPreset(f:{
         pre = {...presetTemplate,...(JSON.parse(Buffer.from(f.data).toString('utf-8')))}
         console.log(pre)
     }
-    let db = getDatabase()
+    if(pre?.promptTemplate !== undefined){
+        pre.promptTemplate = normalizePromptTemplate(pre.promptTemplate)
+    }
+    let db = DBState.db
     if(pre.presetVersion && pre.presetVersion >= 3){
         //NAI preset
         const pr = safeStructuredClone(prebuiltPresets.NAI)
@@ -2364,6 +2413,7 @@ export async function importPreset(f:{
                 role: 'bot'
             })
         }
+        pr.promptTemplate = normalizePromptTemplate(pr.promptTemplate)
         pr.name = "Imported ST Preset"
         db.botPresets.push(pr)
         setDatabase(db)
@@ -2375,4 +2425,58 @@ export async function importPreset(f:{
     }
     db.botPresets.push(pre)
     setDatabase(db)
+}
+
+function normalizePromptRole(role: unknown): 'user'|'bot'|'system'|null {
+    if(role === 'user' || role === 'bot' || role === 'system'){
+        return role
+    }
+    if(role === 'assistant' || role === 'char'){
+        return 'bot'
+    }
+    return null
+}
+
+function normalizeCacheRole(role: unknown): 'user'|'assistant'|'system'|'all' {
+    if(role === 'user' || role === 'assistant' || role === 'system' || role === 'all'){
+        return role
+    }
+    if(role === 'bot' || role === 'char'){
+        return 'assistant'
+    }
+    return 'all'
+}
+
+function normalizePromptTemplate(template: PromptItem[]|null|undefined): PromptItem[]|null {
+    if(!Array.isArray(template)){
+        return null
+    }
+    const normalized = safeStructuredClone(template) as any[]
+    for(const item of normalized){
+        if(!item || typeof item !== 'object'){
+            continue
+        }
+        switch(item.type){
+            case 'plain':
+            case 'jailbreak':
+            case 'cot':{
+                item.role = normalizePromptRole(item.role) ?? 'system'
+                break
+            }
+            case 'persona':
+            case 'description':
+            case 'authornote':
+            case 'memory':{
+                if(item.role2 !== undefined && item.role2 !== null){
+                    item.role2 = normalizePromptRole(item.role2) ?? 'system'
+                }
+                break
+            }
+            case 'cache':{
+                item.role = normalizeCacheRole(item.role)
+                break
+            }
+        }
+    }
+    return normalized as PromptItem[]
 }
