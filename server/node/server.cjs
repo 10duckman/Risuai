@@ -1748,7 +1748,7 @@ app.get('/api/list', authenticatedRouteLimiter, async (req, res, next) => {
     }
 });
 
-app.post('/api/write', authenticatedRouteLimiter, async (req, res, next) => {
+app.post('/api/write', async (req, res, next) => {
     if(!await checkAuth(req, res)){
         return;
     }
