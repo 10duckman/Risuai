@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { applyRecoveredMessage, pollGatewayRecovery } from '../gatewayRecovery'
+import {
+    __resetPendingGenerations,
+    applyRecoveredMessage,
+    clearGenerationPending,
+    markGenerationPending,
+    pollGatewayRecovery,
+    takePendingGenerations,
+} from '../gatewayRecovery'
 
 /**
  * 가짜 시계. sleep 호출이 시간을 진행시키므로 실제로 기다리지 않는다.
@@ -322,5 +329,47 @@ describe('applyRecoveredMessage', () => {
 
         expect(outcome).toEqual({ action: 'skipped', reason: 'user-turn-missing' })
         expect(messages).toHaveLength(0)
+    })
+})
+
+describe('pending generation registry', () => {
+    beforeEach(() => {
+        __resetPendingGenerations()
+    })
+
+    it('등록한 generation을 돌려준다', () => {
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+
+        expect(takePendingGenerations()).toEqual([
+            { chatId: 'gen-1', charIndex: 0, chatIndex: 2 },
+        ])
+    })
+
+    it('take는 목록을 비운다 (중복 복구 방지)', () => {
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+
+        expect(takePendingGenerations()).toHaveLength(1)
+        expect(takePendingGenerations()).toHaveLength(0)
+    })
+
+    it('clear한 generation은 돌려주지 않는다', () => {
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+        markGenerationPending({ chatId: 'gen-2', charIndex: 1, chatIndex: 0 })
+        clearGenerationPending('gen-1')
+
+        expect(takePendingGenerations()).toEqual([
+            { chatId: 'gen-2', charIndex: 1, chatIndex: 0 },
+        ])
+    })
+
+    it('같은 chatId를 두 번 등록해도 하나만 남는다', () => {
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+
+        expect(takePendingGenerations()).toHaveLength(1)
+    })
+
+    it('없는 chatId를 clear해도 던지지 않는다', () => {
+        expect(() => clearGenerationPending('nope')).not.toThrow()
     })
 })

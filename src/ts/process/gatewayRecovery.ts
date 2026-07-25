@@ -155,3 +155,35 @@ export function applyRecoveredMessage(opts: ApplyRecoveredMessageOptions): Apply
     messages.push(opts.buildMessage(responseText))
     return { action: 'appended', index: messages.length - 1 }
 }
+
+export interface PendingGeneration{
+    chatId: string
+    charIndex: number
+    chatIndex: number
+}
+
+/**
+ * 아직 완료 처리되지 않은 generation들. 메모리에만 둔다 — iOS가 탭을
+ * evict하면 같이 날아가고, 그 경우는 복구되지 않는 알려진 한계다.
+ */
+const pendingGenerations = new Map<string, PendingGeneration>()
+
+export function markGenerationPending(entry: PendingGeneration): void{
+    pendingGenerations.set(entry.chatId, entry)
+}
+
+export function clearGenerationPending(chatId: string): void{
+    pendingGenerations.delete(chatId)
+}
+
+/** 목록을 반환하면서 비운다 — 세이프티넷이 같은 건을 두 번 잡지 않게. */
+export function takePendingGenerations(): PendingGeneration[]{
+    const entries = Array.from(pendingGenerations.values())
+    pendingGenerations.clear()
+    return entries
+}
+
+/** 테스트 전용. */
+export function __resetPendingGenerations(): void{
+    pendingGenerations.clear()
+}
