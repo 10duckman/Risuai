@@ -160,6 +160,10 @@ export interface PendingGeneration{
     chatId: string
     charIndex: number
     chatIndex: number
+    /** 캐릭터 안정 식별자 (채팅 삭제로 인한 인덱스 변화 감지). */
+    chaId: string
+    /** 채팅 세션 안정 식별자 (optional). */
+    chatSessionId?: string
 }
 
 /**

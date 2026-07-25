@@ -338,38 +338,67 @@ describe('pending generation registry', () => {
     })
 
     it('등록한 generation을 돌려준다', () => {
-        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2, chaId: 'char-a', chatSessionId: 'session-x' })
 
         expect(takePendingGenerations()).toEqual([
-            { chatId: 'gen-1', charIndex: 0, chatIndex: 2 },
+            { chatId: 'gen-1', charIndex: 0, chatIndex: 2, chaId: 'char-a', chatSessionId: 'session-x' },
         ])
     })
 
     it('take는 목록을 비운다 (중복 복구 방지)', () => {
-        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2, chaId: 'char-a', chatSessionId: 'session-x' })
 
         expect(takePendingGenerations()).toHaveLength(1)
         expect(takePendingGenerations()).toHaveLength(0)
     })
 
     it('clear한 generation은 돌려주지 않는다', () => {
-        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
-        markGenerationPending({ chatId: 'gen-2', charIndex: 1, chatIndex: 0 })
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2, chaId: 'char-a', chatSessionId: 'session-x' })
+        markGenerationPending({ chatId: 'gen-2', charIndex: 1, chatIndex: 0, chaId: 'char-b', chatSessionId: 'session-y' })
         clearGenerationPending('gen-1')
 
         expect(takePendingGenerations()).toEqual([
-            { chatId: 'gen-2', charIndex: 1, chatIndex: 0 },
+            { chatId: 'gen-2', charIndex: 1, chatIndex: 0, chaId: 'char-b', chatSessionId: 'session-y' },
         ])
     })
 
     it('같은 chatId를 두 번 등록해도 하나만 남는다', () => {
-        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
-        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2 })
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2, chaId: 'char-a', chatSessionId: 'session-x' })
+        markGenerationPending({ chatId: 'gen-1', charIndex: 0, chatIndex: 2, chaId: 'char-a', chatSessionId: 'session-x' })
 
         expect(takePendingGenerations()).toHaveLength(1)
     })
 
     it('없는 chatId를 clear해도 던지지 않는다', () => {
         expect(() => clearGenerationPending('nope')).not.toThrow()
+    })
+
+    it('stable identity 필드를 보존한다', () => {
+        markGenerationPending({
+            chatId: 'gen-1',
+            charIndex: 0,
+            chatIndex: 2,
+            chaId: 'char-stable-id',
+            chatSessionId: 'session-stable-id',
+        })
+
+        const entries = takePendingGenerations()
+        expect(entries).toHaveLength(1)
+        expect(entries[0].chaId).toBe('char-stable-id')
+        expect(entries[0].chatSessionId).toBe('session-stable-id')
+    })
+
+    it('chatSessionId가 undefined일 수 있다 (older chats)', () => {
+        markGenerationPending({
+            chatId: 'gen-old',
+            charIndex: 0,
+            chatIndex: 1,
+            chaId: 'char-x',
+        })
+
+        const entries = takePendingGenerations()
+        expect(entries).toHaveLength(1)
+        expect(entries[0].chaId).toBe('char-x')
+        expect(entries[0].chatSessionId).toBeUndefined()
     })
 })

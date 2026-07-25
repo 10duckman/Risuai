@@ -1654,10 +1654,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         // 정상 완료/중단 시에는 해제하고, 포기한 경우에만 남겨서
         // visibilitychange 세이프티넷이 집어갈 수 있게 한다.
         if(isNodeServer && generationId){
+            const currentChar = DBState.db.characters[selectedChar]
+            const currentChatSession = currentChar.chats[selectedChat]
             markGenerationPending({
                 chatId: generationId,
                 charIndex: selectedChar,
                 chatIndex: selectedChat,
+                chaId: currentChar.chaId,
+                chatSessionId: currentChatSession.id,
             })
         }
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
@@ -2273,20 +2277,31 @@ async function runVisibilityRecovery(){
                 continue
             }
 
-            const chat = DBState.db?.characters?.[entry.charIndex]?.chats?.[entry.chatIndex]
-            if(!chat || !Array.isArray(chat.message)){
+            const resolvedChar = DBState.db?.characters?.[entry.charIndex]
+            const resolvedChat = resolvedChar?.chats?.[entry.chatIndex]
+            if(!resolvedChat || !Array.isArray(resolvedChat.message)){
                 console.warn(`[VisibilityRecovery] chat gone for ${entry.chatId}`)
                 continue
             }
 
+            // 인덱스 변화(채팅 삭제 등) 감지 — 잘못된 채팅에 응답을 쓰지 않기 위함.
+            if(resolvedChar.chaId !== entry.chaId){
+                console.warn(`[VisibilityRecovery] character identity mismatch for ${entry.chatId}: expected chaId=${entry.chaId}, got ${resolvedChar.chaId}`)
+                continue
+            }
+            if(entry.chatSessionId && resolvedChat.id && resolvedChat.id !== entry.chatSessionId){
+                console.warn(`[VisibilityRecovery] chat session identity mismatch for ${entry.chatId}: expected id=${entry.chatSessionId}, got ${resolvedChat.id}`)
+                continue
+            }
+
             const outcome = applyRecoveredMessage({
-                messages: chat.message as any,
+                messages: resolvedChat.message as any,
                 chatId: entry.chatId,
                 responseText: recovery.responseText,
                 buildMessage: (responseText:string) => ({
                     role: 'char',
                     data: responseText,
-                    saying: DBState.db.characters[entry.charIndex]?.chaId,
+                    saying: resolvedChar.chaId,
                     time: Date.now(),
                     chatId: entry.chatId,
                 }),
