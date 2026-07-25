@@ -33,7 +33,15 @@ import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
 import { isNodeServer } from "../platform";
-import { INLINE_RECOVERY_TIMEOUT_MS, pollGatewayRecovery } from "./gatewayRecovery";
+import {
+    applyRecoveredMessage,
+    clearGenerationPending,
+    INLINE_RECOVERY_TIMEOUT_MS,
+    markGenerationPending,
+    pollGatewayRecovery,
+    takePendingGenerations,
+    VISIBILITY_RECOVERY_TIMEOUT_MS,
+} from "./gatewayRecovery";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -1642,6 +1650,16 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 chatId: generationId,
             })
         }
+        // 탭이 얼어붙어 인라인 복구까지 실패하는 경우를 대비해 등록한다.
+        // 정상 완료/중단 시에는 해제하고, 포기한 경우에만 남겨서
+        // visibilitychange 세이프티넷이 집어갈 수 있게 한다.
+        if(isNodeServer && generationId){
+            markGenerationPending({
+                chatId: generationId,
+                charIndex: selectedChar,
+                chatIndex: selectedChat,
+            })
+        }
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
         DBState.db.characters[selectedChar].reloadKeys += 1
         let lastResponseChunk:{[key:string]:string} = {}
@@ -1695,6 +1713,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
 
         if(streamAborted || abortSignal.aborted){
+            clearGenerationPending(generationId)
             return false
         }
 
@@ -1757,6 +1776,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             }
         }
 
+        // 여기까지 왔으면 성공이다 (needsRecovery가 false였거나 복구됐다).
+        clearGenerationPending(generationId)
         addRerolls(generationId, Object.values(lastResponseChunk))
 
         DBState.db.characters[selectedChar].chats[selectedChat] = runCurrentChatFunction(DBState.db.characters[selectedChar].chats[selectedChat])
@@ -2200,4 +2221,100 @@ function systemizeChat(chat:OpenAIChat[]){
         }
     }
     return chat
+}
+
+/**
+ * visibilitychange 세이프티넷.
+ *
+ * iOS Safari는 화면이 꺼지거나 탭이 백그라운드로 가면 JS 실행을 완전히
+ * 정지시킨다. 그래서 스트리밍 루프도, 인라인 복구 폴링도 그 자리에서
+ * 멈춘다. 탭이 다시 보이면 아직 완료 처리되지 않은 generation에 대해
+ * 새 예산으로 서버에 한 번 더 물어본다.
+ *
+ * 서버는 클라이언트 연결과 무관하게 Bedrock 스트림을 끝까지 받아 30분간
+ * 버퍼에 들고 있으므로, 대부분의 경우 여기서 온전한 응답을 되찾는다.
+ */
+async function runVisibilityRecovery(){
+    const entries = takePendingGenerations()
+    if(entries.length === 0){
+        return
+    }
+
+    for(const entry of entries){
+        try{
+            const { NodeStorage } = await import('../storage/nodeStorage')
+            const nodeStorage = new NodeStorage()
+            const auth = await nodeStorage.createAuth()
+
+            const recovery = await pollGatewayRecovery({
+                chatId: entry.chatId,
+                timeoutMs: VISIBILITY_RECOVERY_TIMEOUT_MS,
+                now: () => Date.now(),
+                sleep: (ms:number) => new Promise(r => setTimeout(r, ms)),
+                fetchRecover: async (chatId:string) => {
+                    const res = await fetch(`/gateway/recover?chatId=${encodeURIComponent(chatId)}`, {
+                        headers: { 'risu-auth': auth }
+                    })
+                    if(!res.ok){
+                        return { ok: false, status: res.status }
+                    }
+                    const data = await res.json()
+                    return {
+                        ok: true,
+                        status: res.status,
+                        responseText: data.responseText || '',
+                        done: !!data.done,
+                    }
+                },
+            })
+
+            if(recovery.status !== 'done' || !recovery.responseText){
+                console.warn(`[VisibilityRecovery] nothing to apply for ${entry.chatId}: status=${recovery.status}`)
+                continue
+            }
+
+            const chat = DBState.db?.characters?.[entry.charIndex]?.chats?.[entry.chatIndex]
+            if(!chat || !Array.isArray(chat.message)){
+                console.warn(`[VisibilityRecovery] chat gone for ${entry.chatId}`)
+                continue
+            }
+
+            const outcome = applyRecoveredMessage({
+                messages: chat.message as any,
+                chatId: entry.chatId,
+                responseText: recovery.responseText,
+                buildMessage: (responseText:string) => ({
+                    role: 'char',
+                    data: responseText,
+                    saying: DBState.db.characters[entry.charIndex]?.chaId,
+                    time: Date.now(),
+                    chatId: entry.chatId,
+                }),
+            })
+
+            if(outcome.action === 'skipped'){
+                console.log(`[VisibilityRecovery] skipped ${entry.chatId}: ${outcome.reason}`)
+                continue
+            }
+
+            DBState.db.characters[entry.charIndex].reloadKeys += 1
+            console.log(`[VisibilityRecovery] ${outcome.action} ${entry.chatId} (length=${recovery.responseText.length})`)
+        }
+        catch(e){
+            console.error(`[VisibilityRecovery] failed for ${entry.chatId}:`, e)
+        }
+    }
+}
+
+if(isNodeServer && typeof document !== 'undefined'){
+    document.addEventListener('visibilitychange', () => {
+        if(document.visibilityState !== 'visible'){
+            return
+        }
+        // 아직 sendChat이 돌고 있으면 그쪽 인라인 복구가 처리한다.
+        if(get(doingChat)){
+            return
+        }
+        void runVisibilityRecovery()
+    })
 }
