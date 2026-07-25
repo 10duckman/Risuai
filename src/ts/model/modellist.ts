@@ -45,6 +45,36 @@ export const LLMModels: LLMModel[] = [
     ...AnthropicModels,
     // AWS Bedrock Claude models
     {
+        name: "Claude 4.8 Opus (Bedrock global)",
+        id: 'anthropic.claude-opus-4-8',
+        internalID: 'global.anthropic.claude-opus-4-8',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
+        name: "Claude 4.8 Opus (Bedrock us)",
+        id: 'anthropic.claude-opus-4-8-us',
+        internalID: 'us.anthropic.claude-opus-4-8',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
         // Legacy id kept for users who already selected this model. internalID
         // pinned to global so the auto-detect fallback isn't relied on.
         name: "Claude 4.7 Opus (Bedrock global)",
