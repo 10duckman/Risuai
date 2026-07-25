@@ -487,7 +487,13 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
             }
 
             // SSE parser — supports Last-Event-ID resume across connection drops.
-            const MAX_RESUME_ATTEMPTS = 3
+            // iOS Safari freezes tab JS whenever the screen locks or the tab goes
+            // to the background, so a single long generation can drop many times
+            // (observed: 3 drops in 2 minutes, which exhausted the old limit of 3
+            // while the server still had 40s of generation left). The server keeps
+            // its resume buffer for 30 minutes (STREAM_TTL), so a higher ceiling
+            // costs nothing when the stream is genuinely alive.
+            const MAX_RESUME_ATTEMPTS = 12
             let thinking = false
             const stream = new ReadableStream<StreamResponseChunk>({
                 async start(controller){
