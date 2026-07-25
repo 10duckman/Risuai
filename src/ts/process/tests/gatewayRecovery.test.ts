@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { pollGatewayRecovery } from '../gatewayRecovery'
+import { applyRecoveredMessage, pollGatewayRecovery } from '../gatewayRecovery'
 
 /**
  * 가짜 시계. sleep 호출이 시간을 진행시키므로 실제로 기다리지 않는다.
@@ -192,5 +192,135 @@ describe('pollGatewayRecovery', () => {
 
         expect(result.status).toBe('error')
         expect(result.responseText).toBe('partial before crash')
+    })
+})
+
+describe('applyRecoveredMessage', () => {
+    const buildMessage = (responseText: string) => ({
+        role: 'char' as const,
+        data: responseText,
+        chatId: 'gen-1',
+        saying: 'cha-1',
+    })
+
+    it('같은 chatId의 부분 메시지를 완전한 텍스트로 교체한다', () => {
+        const messages = [
+            { role: 'user' as const, data: 'hello' },
+            { role: 'char' as const, data: 'partial resp', chatId: 'gen-1' },
+        ]
+
+        const outcome = applyRecoveredMessage({
+            messages,
+            chatId: 'gen-1',
+            responseText: 'partial response completed',
+            buildMessage,
+        })
+
+        expect(outcome).toEqual({ action: 'patched', index: 1 })
+        expect(messages).toHaveLength(2)
+        expect(messages[1].data).toBe('partial response completed')
+    })
+
+    it('메시지가 삭제된 상태면 새로 추가한다', () => {
+        // 인라인 복구가 포기하면서 splice로 지운 상태
+        const messages = [
+            { role: 'user' as const, data: 'hello' },
+        ]
+
+        const outcome = applyRecoveredMessage({
+            messages,
+            chatId: 'gen-1',
+            responseText: 'recovered response',
+            buildMessage,
+        })
+
+        expect(outcome).toEqual({ action: 'appended', index: 1 })
+        expect(messages).toHaveLength(2)
+        expect(messages[1]).toMatchObject({
+            role: 'char',
+            data: 'recovered response',
+            chatId: 'gen-1',
+        })
+    })
+
+    it('이미 같은 텍스트면 아무것도 하지 않는다', () => {
+        const messages = [
+            { role: 'user' as const, data: 'hello' },
+            { role: 'char' as const, data: 'recovered response', chatId: 'gen-1' },
+        ]
+
+        const outcome = applyRecoveredMessage({
+            messages,
+            chatId: 'gen-1',
+            responseText: 'recovered response',
+            buildMessage,
+        })
+
+        expect(outcome).toEqual({ action: 'skipped', reason: 'already-complete' })
+        expect(messages).toHaveLength(2)
+    })
+
+    it('DB 텍스트가 더 길면 덮어쓰지 않는다', () => {
+        // 후처리 스크립트가 텍스트를 늘렸을 수 있다 — 회귀시키지 않는다
+        const messages = [
+            { role: 'user' as const, data: 'hello' },
+            { role: 'char' as const, data: 'recovered response plus post-processing', chatId: 'gen-1' },
+        ]
+
+        const outcome = applyRecoveredMessage({
+            messages,
+            chatId: 'gen-1',
+            responseText: 'recovered response',
+            buildMessage,
+        })
+
+        expect(outcome).toEqual({ action: 'skipped', reason: 'already-complete' })
+        expect(messages[1].data).toBe('recovered response plus post-processing')
+    })
+
+    it('마지막이 char 메시지면(다른 턴 진행됨) 추가하지 않는다', () => {
+        // 유저가 이미 다음 턴을 받았다 — 뒤늦게 끼워넣으면 대화가 깨진다
+        const messages = [
+            { role: 'user' as const, data: 'hello' },
+            { role: 'char' as const, data: 'some other response', chatId: 'gen-2' },
+        ]
+
+        const outcome = applyRecoveredMessage({
+            messages,
+            chatId: 'gen-1',
+            responseText: 'recovered response',
+            buildMessage,
+        })
+
+        expect(outcome).toEqual({ action: 'skipped', reason: 'user-turn-missing' })
+        expect(messages).toHaveLength(2)
+    })
+
+    it('빈 텍스트는 적용하지 않는다', () => {
+        const messages = [{ role: 'user' as const, data: 'hello' }]
+
+        const outcome = applyRecoveredMessage({
+            messages,
+            chatId: 'gen-1',
+            responseText: '',
+            buildMessage,
+        })
+
+        expect(outcome).toEqual({ action: 'skipped', reason: 'empty' })
+        expect(messages).toHaveLength(1)
+    })
+
+    it('빈 메시지 배열에는 추가하지 않는다', () => {
+        const messages: { role: 'user' | 'char'; data: string; chatId?: string }[] = []
+
+        const outcome = applyRecoveredMessage({
+            messages,
+            chatId: 'gen-1',
+            responseText: 'recovered response',
+            buildMessage,
+        })
+
+        expect(outcome).toEqual({ action: 'skipped', reason: 'user-turn-missing' })
+        expect(messages).toHaveLength(0)
     })
 })

@@ -97,3 +97,61 @@ export async function pollGatewayRecovery(opts: PollGatewayRecoveryOptions): Pro
 
     return { status: 'timeout', responseText: lastText, attempts }
 }
+
+export interface RecoverableMessage{
+    role: 'user' | 'char'
+    data: string
+    chatId?: string
+    [key: string]: unknown
+}
+
+export interface ApplyRecoveredMessageOptions{
+    messages: RecoverableMessage[]
+    chatId: string
+    responseText: string
+    /** 새로 추가해야 할 때 쓰는 메시지 팩토리 (saying/generationInfo 등을 채운다). */
+    buildMessage: (responseText: string) => RecoverableMessage
+}
+
+export type ApplyRecoveredMessageOutcome =
+    | { action: 'patched', index: number }
+    | { action: 'appended', index: number }
+    | { action: 'skipped', reason: 'empty' | 'already-complete' | 'user-turn-missing' }
+
+/**
+ * 복구된 텍스트를 메시지 배열에 반영한다.
+ *
+ * 세이프티넷은 두 가지 상태에서 호출될 수 있다:
+ *   1. 부분 텍스트를 담은 char 메시지가 남아있다 → 교체(patch)
+ *   2. 인라인 복구가 포기하면서 메시지를 지웠다 → 추가(append)
+ *
+ * 어느 쪽이든 대화가 이미 다음 턴으로 넘어갔으면 건드리지 않는다.
+ */
+export function applyRecoveredMessage(opts: ApplyRecoveredMessageOptions): ApplyRecoveredMessageOutcome{
+    const { messages, chatId, responseText } = opts
+
+    if(!responseText){
+        return { action: 'skipped', reason: 'empty' }
+    }
+
+    const existingIndex = messages.findIndex((m) => m.role === 'char' && m.chatId === chatId)
+    if(existingIndex !== -1){
+        // 이미 같거나 더 긴 텍스트가 있으면 회귀시키지 않는다. 후처리
+        // 스크립트가 텍스트를 늘렸을 수 있다.
+        if(messages[existingIndex].data.length >= responseText.length){
+            return { action: 'skipped', reason: 'already-complete' }
+        }
+        messages[existingIndex].data = responseText
+        return { action: 'patched', index: existingIndex }
+    }
+
+    // 메시지가 없다 — 마지막 턴이 user일 때만 추가한다. 마지막이 char면
+    // 다른 generation이 이미 응답했다는 뜻이라, 뒤늦게 끼워넣으면 대화가 깨진다.
+    const last = messages[messages.length - 1]
+    if(!last || last.role !== 'user'){
+        return { action: 'skipped', reason: 'user-turn-missing' }
+    }
+
+    messages.push(opts.buildMessage(responseText))
+    return { action: 'appended', index: messages.length - 1 }
+}
