@@ -33,6 +33,7 @@ import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
 import { isNodeServer } from "../platform";
+import { INLINE_RECOVERY_TIMEOUT_MS, pollGatewayRecovery } from "./gatewayRecovery";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -123,6 +124,29 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             return data.trim()
         }
         return data.trim()
+    }
+
+    /**
+     * `/gateway/recover` 호출 어댑터. pollGatewayRecovery가 fetch를 모르게
+     * 유지하기 위해 여기서 감싼다.
+     */
+    async function fetchGatewayRecover(chatId:string){
+        const { NodeStorage } = await import('../storage/nodeStorage')
+        const nodeStorage = new NodeStorage()
+        const auth = await nodeStorage.createAuth()
+        const res = await fetch(`/gateway/recover?chatId=${encodeURIComponent(chatId)}`, {
+            headers: { 'risu-auth': auth }
+        })
+        if(!res.ok){
+            return { ok: false, status: res.status }
+        }
+        const data = await res.json()
+        return {
+            ok: true,
+            status: res.status,
+            responseText: data.responseText || '',
+            done: !!data.done,
+        }
     }
 
     function throwError(error:string){
@@ -1686,43 +1710,38 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         if(needsRecovery){
             let recovered = false
             try{
-                const { NodeStorage } = await import('../storage/nodeStorage')
-                const nodeStorage = new NodeStorage()
-                const auth = await nodeStorage.createAuth()
-                // Poll until server marks the stream done or up to 30s. The Bedrock
-                // response is still being assembled when we reach here in race-loss
-                // cases — the in-memory buffer fills as tokens arrive.
-                const deadline = Date.now() + 30000
-                let attempt = 0
-                while(Date.now() < deadline){
-                    attempt++
-                    const recoveryRes = await fetch(`/gateway/recover?chatId=${encodeURIComponent(generationId)}`, {
-                        headers: { 'risu-auth': auth }
-                    })
-                    if(recoveryRes.ok){
-                        const recoveryData = await recoveryRes.json()
-                        const text = recoveryData.responseText || ''
-                        const done = !!recoveryData.done
-                        // Treat as recovered when the server says it's done, OR when
-                        // we have a longer body than what reached the client.
-                        if(text && (done || text.length > result.length)){
-                            result = text
-                            let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
-                            DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
-                            emoChanged = result2.emoChanged
-                            DBState.db.characters[selectedChar].reloadKeys += 1
-                            if(done){
-                                recovered = true
-                                console.log(`[Streaming] Recovered response from gateway (attempt=${attempt}, length=${result.length}, expected=${expectedLength})`)
-                                break
-                            }
-                        }
-                        if(done) break
-                    } else if(recoveryRes.status === 404 && attempt > 3){
-                        // Server has no record of this chatId after a few tries — give up.
-                        break
-                    }
-                    await new Promise(r => setTimeout(r, 1000))
+                // 서버가 done을 줄 때까지 기다린다. 예전에는 30초로 끊었는데,
+                // Bedrock 생성이 그보다 오래 걸리면(실측 167초) 응답이 서버에
+                // 온전히 있는데도 실패로 처리돼 메시지가 삭제됐다.
+                const applyPartial = async (text:string) => {
+                    const partial = await processScriptFull(nowChatroom, reformatContent(prefix + text), 'editoutput', msgIndex)
+                    DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = partial.data
+                    emoChanged = partial.emoChanged
+                    DBState.db.characters[selectedChar].reloadKeys += 1
+                }
+
+                const pending:Promise<void>[] = []
+                const recovery = await pollGatewayRecovery({
+                    chatId: generationId,
+                    timeoutMs: INLINE_RECOVERY_TIMEOUT_MS,
+                    fetchRecover: fetchGatewayRecover,
+                    now: () => Date.now(),
+                    sleep: (ms:number) => new Promise(r => setTimeout(r, ms)),
+                    onProgress: (text:string) => {
+                        // 도착하는 부분 텍스트를 화면에 반영해 스트리밍처럼 보이게 한다.
+                        pending.push(applyPartial(text))
+                    },
+                })
+                await Promise.all(pending)
+
+                if(recovery.status === 'done' && recovery.responseText){
+                    result = recovery.responseText
+                    await applyPartial(result)
+                    recovered = true
+                    console.log(`[Streaming] Recovered response from gateway (attempts=${recovery.attempts}, length=${result.length}, expected=${expectedLength})`)
+                }
+                else{
+                    console.warn(`[Streaming] Recovery gave up: status=${recovery.status} attempts=${recovery.attempts} length=${recovery.responseText.length}`)
                 }
             }
             catch(recoveryErr){
