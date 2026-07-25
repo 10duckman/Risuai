@@ -45,6 +45,70 @@ export const LLMModels: LLMModel[] = [
     ...AnthropicModels,
     // AWS Bedrock Claude models
     {
+        name: "Claude 5 Opus (Bedrock global)",
+        id: 'anthropic.claude-opus-5',
+        internalID: 'global.anthropic.claude-opus-5',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort,
+            LLMFlags.claudeThinkingOnByDefault
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
+        name: "Claude 5 Opus (Bedrock us)",
+        id: 'anthropic.claude-opus-5-us',
+        internalID: 'us.anthropic.claude-opus-5',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort,
+            LLMFlags.claudeThinkingOnByDefault
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
+        name: "Claude 5 Sonnet (Bedrock global)",
+        id: 'anthropic.claude-sonnet-5',
+        internalID: 'global.anthropic.claude-sonnet-5',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort,
+            LLMFlags.claudeThinkingOnByDefault
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
+        name: "Claude 5 Sonnet (Bedrock us)",
+        id: 'anthropic.claude-sonnet-5-us',
+        internalID: 'us.anthropic.claude-sonnet-5',
+        provider: LLMProvider.AWS,
+        format: LLMFormat.AWSBedrockClaude,
+        flags: [
+            LLMFlags.hasImageInput,
+            LLMFlags.hasFirstSystemPrompt,
+            LLMFlags.claudeAdaptiveThinking,
+            LLMFlags.claudeXHighEffort,
+            LLMFlags.claudeThinkingOnByDefault
+        ],
+        parameters: [],
+        tokenizer: LLMTokenizer.Claude,
+    },
+    {
         name: "Claude 4.8 Opus (Bedrock global)",
         id: 'anthropic.claude-opus-4-8',
         internalID: 'global.anthropic.claude-opus-4-8',
