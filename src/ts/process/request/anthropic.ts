@@ -2,7 +2,7 @@ import { Sha256 } from "@aws-crypto/sha256-js"
 import { HttpRequest } from "@smithy/protocol-http"
 import { SignatureV4 } from "@smithy/signature-v4"
 import { addFetchLog, fetchNative, globalFetch, textifyReadableStream } from "src/ts/globalApi.svelte"
-import { LLMFlags, LLMFormat } from "src/ts/model/modellist"
+import { LLMFormat } from "src/ts/model/modellist"
 import { registerClaudeObserver } from "src/ts/observer.svelte"
 import { getDatabase } from "src/ts/storage/database.svelte"
 import { replaceAsync, simplifySchema, sleep } from "src/ts/util"
@@ -12,6 +12,7 @@ import { extractJSON } from "../templates/jsonSchema"
 import { callTool, decodeToolCall, encodeToolCall } from "../mcp/mcp"
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from './request'
 import { applyParameters } from './shared'
+import { applyClaudeThinking } from './claudeThinking'
 
 interface Claude3TextBlock {
     type: 'text',
@@ -360,24 +361,10 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
     })
 
     // Handle thinking mode: off, adaptive, or budget
-    if(db.thinkingType === 'off'){
-        delete body.thinking
-    }
-    else if(db.thinkingType === 'adaptive' && arg.modelInfo.flags.includes(LLMFlags.claudeAdaptiveThinking)){
-        // Adaptive thinking mode
-        delete body.thinking
-        body.thinking = { type: 'adaptive' }
-        body.output_config = { effort: db.adaptiveThinkingEffort ?? 'high' }
-    }
-    else if(body?.thinking?.budget_tokens === 0){
-        delete body.thinking
-    }
-    else if(body?.thinking?.budget_tokens && body?.thinking?.budget_tokens > 0){
-        body.thinking.type = 'enabled'
-    }
-    else if(body?.thinking?.budget_tokens === null){
-        delete body.thinking
-    }
+    applyClaudeThinking(body, {
+        thinkingType: db.thinkingType,
+        adaptiveThinkingEffort: db.adaptiveThinkingEffort,
+    }, arg.modelInfo.flags)
 
     if(systemPrompt === ''){
         delete body.system
