@@ -50,3 +50,17 @@ dist.zip
 
 # Due to Cargo.lock makes the project build fail, we ignore it
 Cargo.lock
+
+# AI-DLC — per-user cursors and machine-local runtime
+aidlc/active-space
+aidlc/spaces/*/intents/active-intent
+aidlc/.aidlc-clone-id
+aidlc/.aidlc-sessions/
+aidlc/spaces/*/intents/*/runtime-graph.json
+aidlc/spaces/*/intents/*/.aidlc-*
+aidlc/spaces/*/intents/.aidlc-hooks-health/
+.claude/settings.local.json
+
+# Local scratch
+.playwright-mcp/
+save.local-test-backup/
