@@ -1285,8 +1285,6 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             console.log(`[Gateway] Log: ${logId}`, JSON.stringify(reqLog));
         }
 
-        const cacheTtl = req.headers['x-cache-ttl'] || '5m';
-
         // Trim trailing whitespace from assistant messages (Bedrock rejects it)
         if (messages) {
             for (const m of messages) {
@@ -1303,7 +1301,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         const commandParams = {
             modelId,
             messages,
-            system: system ? [{ text: system }, { cachePoint: { type: "default", ttl: cacheTtl } }] : undefined,
+            system: system ? [{ text: system }] : undefined,
             inferenceConfig,
         };
 
