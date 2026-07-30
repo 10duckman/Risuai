@@ -191,3 +191,44 @@ export function takePendingGenerations(): PendingGeneration[]{
 export function __resetPendingGenerations(): void{
     pendingGenerations.clear()
 }
+
+export type SyncMessageOutcome =
+    | { action: 'replaced' }
+    | { action: 'refused', reason: 'index-out-of-range' | 'chat-id-mismatch' | 'not-char-message' | 'not-longer' }
+
+export interface SyncMessageAtIndexOptions{
+    messages: RecoverableMessage[]
+    index: number
+    /** 버튼을 누른 시점에 그 메시지가 갖고 있던 chatId. */
+    chatId: string
+    responseText: string
+}
+
+/**
+ * 지정한 인덱스의 메시지를 서버 텍스트로 교체한다.
+ *
+ * 사용자가 지목한 그 메시지만 건드린다. chatId를 다시 확인하는 이유는,
+ * 버튼을 누른 뒤 조회를 기다리는 사이 메시지가 삭제/재배열될 수 있어서다.
+ * 불일치면 엉뚱한 메시지를 덮어쓰게 되므로 거부한다.
+ */
+export function syncMessageAtIndex(opts: SyncMessageAtIndexOptions): SyncMessageOutcome{
+    const { messages, index, chatId, responseText } = opts
+
+    if(index < 0 || index >= messages.length){
+        return { action: 'refused', reason: 'index-out-of-range' }
+    }
+
+    const target = messages[index]
+    if(target.chatId !== chatId){
+        return { action: 'refused', reason: 'chat-id-mismatch' }
+    }
+    if(target.role !== 'char'){
+        return { action: 'refused', reason: 'not-char-message' }
+    }
+    if(responseText.length <= target.data.length){
+        return { action: 'refused', reason: 'not-longer' }
+    }
+
+    target.data = responseText
+    return { action: 'replaced' }
+}
