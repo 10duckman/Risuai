@@ -1,13 +1,17 @@
 <script lang="ts">
-    import { ArrowLeft, ArrowLeftRightIcon, ArrowRight, BookmarkIcon, BotIcon, CopyIcon, PowerOff, GitBranch, HamburgerIcon, LanguagesIcon, MenuIcon, PencilIcon, RefreshCcwIcon, SplitIcon, TrashIcon, UserIcon, Volume2Icon, Scissors } from "@lucide/svelte"
+    import { ArrowLeft, ArrowLeftRightIcon, ArrowRight, BookmarkIcon, BotIcon, CloudDownloadIcon, CopyIcon, PowerOff, GitBranch, HamburgerIcon, LanguagesIcon, MenuIcon, PencilIcon, RefreshCcwIcon, SplitIcon, TrashIcon, UserIcon, Volume2Icon, Scissors } from "@lucide/svelte"
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName } from "src/ts/globalApi.svelte"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
     import { longpress } from "src/ts/gui/longtouch"
     import { getModelInfo } from "src/ts/model/modellist"
+    import { isNodeServer } from "src/ts/platform"
+    import { syncMessageAtIndex } from "src/ts/process/gatewayRecovery"
+    import { classifySyncResult } from "src/ts/process/messageSync"
     import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
-    import { risuChatParser } from "src/ts/process/scripts"
+    import { processScriptFull, risuChatParser } from "src/ts/process/scripts"
     import { runTrigger } from 'src/ts/process/triggers'
     import { sayTTS } from "src/ts/process/tts"
+    import { NodeStorage } from "src/ts/storage/nodeStorage"
     import { DBState, ReloadChatPointer, CurrentTriggerIdStore, popupStore } from 'src/ts/stores.svelte'
     import { ConnectionOpenStore } from "src/ts/sync/multiuser"
     import { capitalize, getUserIcon, getUserName, sleep } from "src/ts/util"
@@ -15,7 +19,7 @@
     import { type Unsubscriber } from "svelte/store"
     import { v4 as uuidv4, v4 } from 'uuid'
     import { language } from "../../lang"
-    import { alertClear, alertConfirm, alertInput, alertNormal, alertRequestData, alertWait } from "../../ts/alert"
+    import { alertClear, alertConfirm, alertError, alertInput, alertNormal, alertRequestData, alertWait } from "../../ts/alert"
     import { ParseMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
     import { getCurrentCharacter, getCurrentChat, setCurrentChat, type MessageGenerationInfo } from "../../ts/storage/database.svelte"
     import { selectedCharID } from "../../ts/stores.svelte"
@@ -300,6 +304,88 @@
         }
 
         chat.bookmarks = [...chat.bookmarks];
+    }
+
+    /**
+     * 서버에서 이 메시지의 완성본을 가져온다.
+     *
+     * 폴링하지 않는다 — 한 번 조회하고 결과를 보여준다. 생성 중이면 사용자가
+     * 다시 누른다.
+     */
+    async function syncFromServer(){
+        const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage]
+        const target = chat.message[idx]
+        if(!target?.chatId){
+            return
+        }
+        const chatId = target.chatId
+        const currentText = target.data
+
+        alertWait(language.loading)
+        try{
+            const nodeStorage = new NodeStorage()
+            const auth = await nodeStorage.createAuth()
+            const res = await fetch(`/gateway/recover?chatId=${encodeURIComponent(chatId)}`, {
+                headers: { 'risu-auth': auth }
+            })
+
+            let outcome
+            if(!res.ok){
+                outcome = classifySyncResult({ ok: false, status: res.status }, currentText)
+            }
+            else{
+                const data = await res.json()
+                outcome = classifySyncResult({
+                    ok: true,
+                    status: res.status,
+                    responseText: data.responseText || '',
+                    done: !!data.done,
+                }, currentText)
+            }
+
+            alertClear()
+
+            switch(outcome.kind){
+                case 'replaced': {
+                    // 정상 스트리밍과 같은 후처리를 거쳐야 표시가 일관된다.
+                    const processed = await processScriptFull(
+                        getCurrentCharacter(),
+                        outcome.text.trim(),
+                        'editoutput',
+                        idx,
+                    )
+                    const applied = syncMessageAtIndex({
+                        messages: chat.message as any,
+                        index: idx,
+                        chatId,
+                        responseText: processed.data,
+                    })
+                    if(applied.action === 'refused'){
+                        alertNormal(language.syncFromServerAlreadyComplete)
+                        break
+                    }
+                    DBState.db.characters[selIdState.selId].reloadKeys += 1
+                    alertNormal(language.syncFromServerReplaced(outcome.from, outcome.to))
+                    break
+                }
+                case 'already-complete':
+                    alertNormal(language.syncFromServerAlreadyComplete)
+                    break
+                case 'in-progress':
+                    alertNormal(language.syncFromServerInProgress(outcome.length))
+                    break
+                case 'not-found':
+                    alertNormal(language.syncFromServerNotFound)
+                    break
+                case 'error':
+                    alertError(`Sync failed: HTTP ${outcome.status}`)
+                    break
+            }
+        }
+        catch(e){
+            alertClear()
+            alertError(`Sync failed: ${e}`)
+        }
     }
 </script>
 
@@ -793,6 +879,18 @@
             <BookmarkIcon size={20}/>
             {#if showNames}
                 <span class="ml-1">{language.bookmark}</span>
+            {/if}
+        </button>
+    {/if}
+
+    {#if isNodeServer && role === 'char' && DBState.db.characters[selIdState.selId]?.chats[DBState.db.characters[selIdState.selId]?.chatPage]?.message[idx]?.chatId}
+        <button class="flex items-center hover:text-blue-500 transition-colors" onclick={async () => {
+            await sleep(1)
+            await syncFromServer()
+        }}>
+            <CloudDownloadIcon size={20}/>
+            {#if showNames}
+                <span class="ml-1">{language.syncFromServer}</span>
             {/if}
         </button>
     {/if}
