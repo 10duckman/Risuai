@@ -33,15 +33,6 @@ import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
 import { isNodeServer } from "../platform";
-import {
-    applyRecoveredMessage,
-    clearGenerationPending,
-    INLINE_RECOVERY_TIMEOUT_MS,
-    markGenerationPending,
-    pollGatewayRecovery,
-    takePendingGenerations,
-    VISIBILITY_RECOVERY_TIMEOUT_MS,
-} from "./gatewayRecovery";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -132,29 +123,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             return data.trim()
         }
         return data.trim()
-    }
-
-    /**
-     * `/gateway/recover` 호출 어댑터. pollGatewayRecovery가 fetch를 모르게
-     * 유지하기 위해 여기서 감싼다.
-     */
-    async function fetchGatewayRecover(chatId:string){
-        const { NodeStorage } = await import('../storage/nodeStorage')
-        const nodeStorage = new NodeStorage()
-        const auth = await nodeStorage.createAuth()
-        const res = await fetch(`/gateway/recover?chatId=${encodeURIComponent(chatId)}`, {
-            headers: { 'risu-auth': auth }
-        })
-        if(!res.ok){
-            return { ok: false, status: res.status }
-        }
-        const data = await res.json()
-        return {
-            ok: true,
-            status: res.status,
-            responseText: data.responseText || '',
-            done: !!data.done,
-        }
     }
 
     function throwError(error:string){
@@ -1649,20 +1617,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 chatId: generationId,
             })
         }
-        // 탭이 얼어붙어 인라인 복구까지 실패하는 경우를 대비해 등록한다.
-        // 정상 완료/중단 시에는 해제하고, 포기한 경우에만 남겨서
-        // visibilitychange 세이프티넷이 집어갈 수 있게 한다.
-        if(isNodeServer && generationId){
-            const currentChar = DBState.db.characters[selectedChar]
-            const currentChatSession = currentChar.chats[selectedChat]
-            markGenerationPending({
-                chatId: generationId,
-                charIndex: selectedChar,
-                chatIndex: selectedChat,
-                chaId: currentChar.chaId,
-                chatSessionId: currentChatSession.id,
-            })
-        }
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
         DBState.db.characters[selectedChar].reloadKeys += 1
         let lastResponseChunk:{[key:string]:string} = {}
@@ -1716,7 +1670,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
 
         if(streamAborted || abortSignal.aborted){
-            clearGenerationPending(generationId)
             return false
         }
 
@@ -1724,63 +1677,19 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         const expectedLength = parseInt(lastResponseChunk?.['__expectedLength'] ?? '-1')
         const streamComplete = lastResponseChunk?.['__streamComplete'] === 'true'
         const isGatewayStream = '__streamComplete' in lastResponseChunk
-        const needsRecovery = streamError
+        const streamIncomplete = streamError
             || !result
             || (expectedLength > 0 && result.length < expectedLength)
             || (isGatewayStream && !streamComplete)
 
-        if(needsRecovery){
-            let recovered = false
-            try{
-                // 서버가 done을 줄 때까지 기다린다. 예전에는 30초로 끊었는데,
-                // Bedrock 생성이 그보다 오래 걸리면(실측 167초) 응답이 서버에
-                // 온전히 있는데도 실패로 처리돼 메시지가 삭제됐다.
-                const applyPartial = async (text:string) => {
-                    const partial = await processScriptFull(nowChatroom, reformatContent(prefix + text), 'editoutput', msgIndex)
-                    DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = partial.data
-                    emoChanged = partial.emoChanged
-                    DBState.db.characters[selectedChar].reloadKeys += 1
-                }
-
-                const pending:Promise<void>[] = []
-                const recovery = await pollGatewayRecovery({
-                    chatId: generationId,
-                    timeoutMs: INLINE_RECOVERY_TIMEOUT_MS,
-                    fetchRecover: fetchGatewayRecover,
-                    now: () => Date.now(),
-                    sleep: (ms:number) => new Promise(r => setTimeout(r, ms)),
-                    onProgress: (text:string) => {
-                        // 도착하는 부분 텍스트를 화면에 반영해 스트리밍처럼 보이게 한다.
-                        pending.push(applyPartial(text))
-                    },
-                })
-                await Promise.all(pending)
-
-                if(recovery.status === 'done' && recovery.responseText){
-                    result = recovery.responseText
-                    await applyPartial(result)
-                    recovered = true
-                    console.log(`[Streaming] Recovered response from gateway (attempts=${recovery.attempts}, length=${result.length}, expected=${expectedLength})`)
-                }
-                else{
-                    console.warn(`[Streaming] Recovery gave up: status=${recovery.status} attempts=${recovery.attempts} length=${recovery.responseText.length}`)
-                }
-            }
-            catch(recoveryErr){
-                console.error('[Streaming] Recovery failed:', recoveryErr)
-            }
-
-            if(!recovered){
-                // 메시지를 지우지 않는다. 지우면 chatId가 사라져 수동 동기화조차
-                // 불가능해진다. 부분 텍스트(빈 것이라도)를 남겨두면 사용자가
-                // 메시지 메뉴의 "서버에서 동기화"로 완성본을 가져올 수 있다.
-                throwError('Stream connection lost. Use "Sync from Server" on the message to recover it.')
-                return false
-            }
+        if(streamIncomplete){
+            // 메시지를 지우지 않는다. 지우면 chatId가 사라져 수동 동기화조차
+            // 불가능해진다. 부분 텍스트(빈 것이라도)를 남겨두면 사용자가
+            // 메시지 메뉴의 "서버에서 동기화"로 완성본을 가져올 수 있다.
+            throwError('Stream connection lost. Use "Sync from Server" on the message to recover it.')
+            return false
         }
 
-        // 여기까지 왔으면 성공이다 (needsRecovery가 false였거나 복구됐다).
-        clearGenerationPending(generationId)
         addRerolls(generationId, Object.values(lastResponseChunk))
 
         DBState.db.characters[selectedChar].chats[selectedChat] = runCurrentChatFunction(DBState.db.characters[selectedChar].chats[selectedChat])
@@ -2226,109 +2135,3 @@ function systemizeChat(chat:OpenAIChat[]){
     return chat
 }
 
-/**
- * visibilitychange 세이프티넷.
- *
- * iOS Safari는 화면이 꺼지거나 탭이 백그라운드로 가면 JS 실행을 완전히
- * 정지시킨다. 그래서 스트리밍 루프도, 인라인 복구 폴링도 그 자리에서
- * 멈춘다. 탭이 다시 보이면 아직 완료 처리되지 않은 generation에 대해
- * 새 예산으로 서버에 한 번 더 물어본다.
- *
- * 서버는 클라이언트 연결과 무관하게 Bedrock 스트림을 끝까지 받아 30분간
- * 버퍼에 들고 있으므로, 대부분의 경우 여기서 온전한 응답을 되찾는다.
- */
-async function runVisibilityRecovery(){
-    const entries = takePendingGenerations()
-    if(entries.length === 0){
-        return
-    }
-
-    for(const entry of entries){
-        try{
-            const { NodeStorage } = await import('../storage/nodeStorage')
-            const nodeStorage = new NodeStorage()
-            const auth = await nodeStorage.createAuth()
-
-            const recovery = await pollGatewayRecovery({
-                chatId: entry.chatId,
-                timeoutMs: VISIBILITY_RECOVERY_TIMEOUT_MS,
-                now: () => Date.now(),
-                sleep: (ms:number) => new Promise(r => setTimeout(r, ms)),
-                fetchRecover: async (chatId:string) => {
-                    const res = await fetch(`/gateway/recover?chatId=${encodeURIComponent(chatId)}`, {
-                        headers: { 'risu-auth': auth }
-                    })
-                    if(!res.ok){
-                        return { ok: false, status: res.status }
-                    }
-                    const data = await res.json()
-                    return {
-                        ok: true,
-                        status: res.status,
-                        responseText: data.responseText || '',
-                        done: !!data.done,
-                    }
-                },
-            })
-
-            if(recovery.status !== 'done' || !recovery.responseText){
-                console.warn(`[VisibilityRecovery] nothing to apply for ${entry.chatId}: status=${recovery.status}`)
-                continue
-            }
-
-            const resolvedChar = DBState.db?.characters?.[entry.charIndex]
-            const resolvedChat = resolvedChar?.chats?.[entry.chatIndex]
-            if(!resolvedChat || !Array.isArray(resolvedChat.message)){
-                console.warn(`[VisibilityRecovery] chat gone for ${entry.chatId}`)
-                continue
-            }
-
-            // 인덱스 변화(채팅 삭제 등) 감지 — 잘못된 채팅에 응답을 쓰지 않기 위함.
-            if(resolvedChar.chaId !== entry.chaId){
-                console.warn(`[VisibilityRecovery] character identity mismatch for ${entry.chatId}: expected chaId=${entry.chaId}, got ${resolvedChar.chaId}`)
-                continue
-            }
-            if(entry.chatSessionId && resolvedChat.id && resolvedChat.id !== entry.chatSessionId){
-                console.warn(`[VisibilityRecovery] chat session identity mismatch for ${entry.chatId}: expected id=${entry.chatSessionId}, got ${resolvedChat.id}`)
-                continue
-            }
-
-            const outcome = applyRecoveredMessage({
-                messages: resolvedChat.message as any,
-                chatId: entry.chatId,
-                responseText: recovery.responseText,
-                buildMessage: (responseText:string) => ({
-                    role: 'char',
-                    data: responseText,
-                    saying: resolvedChar.chaId,
-                    time: Date.now(),
-                    chatId: entry.chatId,
-                }),
-            })
-
-            if(outcome.action === 'skipped'){
-                console.log(`[VisibilityRecovery] skipped ${entry.chatId}: ${outcome.reason}`)
-                continue
-            }
-
-            DBState.db.characters[entry.charIndex].reloadKeys += 1
-            console.log(`[VisibilityRecovery] ${outcome.action} ${entry.chatId} (length=${recovery.responseText.length})`)
-        }
-        catch(e){
-            console.error(`[VisibilityRecovery] failed for ${entry.chatId}:`, e)
-        }
-    }
-}
-
-if(isNodeServer && typeof document !== 'undefined'){
-    document.addEventListener('visibilitychange', () => {
-        if(document.visibilityState !== 'visible'){
-            return
-        }
-        // 아직 sendChat이 돌고 있으면 그쪽 인라인 복구가 처리한다.
-        if(get(doingChat)){
-            return
-        }
-        void runVisibilityRecovery()
-    })
-}
