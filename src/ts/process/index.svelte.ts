@@ -1634,7 +1634,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         const reader = req.result.getReader()
         let msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length
         let prefix = ''
-        const isNewMessage = !arg.continue
         if(arg.continue){
             msgIndex -= 1
             prefix = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data
@@ -1772,10 +1771,10 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             }
 
             if(!recovered){
-                if(isNewMessage){
-                    DBState.db.characters[selectedChar].chats[selectedChat].message.splice(msgIndex, 1)
-                }
-                throwError('Stream connection lost. Please try again.')
+                // 메시지를 지우지 않는다. 지우면 chatId가 사라져 수동 동기화조차
+                // 불가능해진다. 부분 텍스트(빈 것이라도)를 남겨두면 사용자가
+                // 메시지 메뉴의 "서버에서 동기화"로 완성본을 가져올 수 있다.
+                throwError('Stream connection lost. Use "Sync from Server" on the message to recover it.')
                 return false
             }
         }
