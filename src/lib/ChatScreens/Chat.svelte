@@ -313,7 +313,13 @@
      * 다시 누른다.
      */
     async function syncFromServer(){
-        const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage]
+        // 조회를 기다리는 사이 사용자가 캐릭터를 바꾸거나 홈으로 나갈 수 있다.
+        // 후처리와 화면 갱신이 엉뚱한 캐릭터에 적용되지 않도록 지금 붙잡아둔다.
+        const char = DBState.db.characters[selIdState.selId]
+        if(!char){
+            return
+        }
+        const chat = char.chats[char.chatPage]
         const target = chat.message[idx]
         if(!target?.chatId){
             return
@@ -349,7 +355,7 @@
                 case 'replaced': {
                     // 정상 스트리밍과 같은 후처리를 거쳐야 표시가 일관된다.
                     const processed = await processScriptFull(
-                        getCurrentCharacter(),
+                        char,
                         outcome.text.trim(),
                         'editoutput',
                         idx,
@@ -361,10 +367,14 @@
                         responseText: processed.data,
                     })
                     if(applied.action === 'refused'){
-                        alertNormal(language.syncFromServerAlreadyComplete)
+                        // not-longer만 "이미 최신"이다. 나머지 세 가지는 조회 중에
+                        // 메시지가 지워지거나 밀린 것이라 다시 시도해야 한다.
+                        alertNormal(applied.reason === 'not-longer'
+                            ? language.syncFromServerAlreadyComplete
+                            : language.syncFromServerStale)
                         break
                     }
-                    DBState.db.characters[selIdState.selId].reloadKeys += 1
+                    char.reloadKeys += 1
                     alertNormal(language.syncFromServerReplaced(outcome.from, outcome.to))
                     break
                 }

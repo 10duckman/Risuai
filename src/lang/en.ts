@@ -1573,6 +1573,7 @@ export const languageEnglish = {
     syncFromServerAlreadyComplete: "Already up to date.",
     syncFromServerInProgress: (length:number) => `The server is still generating (${length} characters so far). Try again shortly.`,
     syncFromServerNotFound: "The server has no record of this response.",
+    syncFromServerStale: "The message changed and could not be synced. Try again.",
     branchedText: "This chat has been branched from {}.",
     loadMore: "Load More",
     disableMessage: "Disable Message",
