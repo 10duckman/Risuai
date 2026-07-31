@@ -1566,6 +1566,11 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         if(arg.continue){
             msgIndex -= 1
             prefix = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data
+            // 이어쓰기도 새 generationId로 서버에 요청하므로, 서버 로그는 새 id로
+            // 저장된다. 메시지가 첫 생성의 chatId를 그대로 들고 있으면 "서버에서
+            // 동기화"가 옛 id를 조회해 더 짧은 텍스트를 받고 "이미 최신"으로 끝난다.
+            // (비스트리밍 경로는 이미 chatId를 갱신한다.)
+            DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].chatId = generationId
         }
         else{
             DBState.db.characters[selectedChar].chats[selectedChat].message.push({
