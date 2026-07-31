@@ -32,7 +32,6 @@ import { getModelInfo, LLMFlags } from "../model/modellist";
 import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
-import { isNodeServer } from "../platform";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -1554,47 +1553,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         return false
     }
     if(req.type === 'fail'){
-        // Even when the gateway POST itself failed, the Bedrock response might
-        // still complete on the server. Try to recover via /gateway/recover
-        // before giving up. Only do this for node server runtimes — desktop/web
-        // builds don't have the gateway endpoint.
-        if(isNodeServer && generationId){
-            try{
-                const { NodeStorage } = await import('../storage/nodeStorage')
-                const nodeStorage = new NodeStorage()
-                const auth = await nodeStorage.createAuth()
-                const deadline = Date.now() + 30000
-                while(Date.now() < deadline){
-                    const recoveryRes = await fetch(`/gateway/recover?chatId=${encodeURIComponent(generationId)}`, {
-                        headers: { 'risu-auth': auth }
-                    })
-                    if(recoveryRes.ok){
-                        const data = await recoveryRes.json()
-                        if(data.responseText && data.done){
-                            const msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length
-                            DBState.db.characters[selectedChar].chats[selectedChat].message.push({
-                                role: 'char',
-                                data: data.responseText,
-                                saying: currentChar.chaId,
-                                time: Date.now(),
-                                generationInfo,
-                                promptInfo,
-                                chatId: generationId,
-                            })
-                            DBState.db.characters[selectedChar].reloadKeys += 1
-                            console.log(`[Streaming] Recovered response from gateway after fail (length=${data.responseText.length})`)
-                            return true
-                        }
-                        if(data.done) break
-                    } else if(recoveryRes.status === 404){
-                        break
-                    }
-                    await new Promise(r => setTimeout(r, 1000))
-                }
-            } catch(e){
-                console.error('[Streaming] Post-fail recovery error:', e)
-            }
-        }
+        // POST 자체가 실패했으면 요청이 Bedrock에 닿지 못한 것이므로 서버에
+        // 되찾을 응답이 없다. 메시지도 아직 만들어지지 않은 시점이라 동기화
+        // 버튼을 붙일 대상도 없다 — 실패만 알린다.
         throwError(req.result)
         return false
     }
@@ -1686,7 +1647,13 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             // 메시지를 지우지 않는다. 지우면 chatId가 사라져 수동 동기화조차
             // 불가능해진다. 부분 텍스트(빈 것이라도)를 남겨두면 사용자가
             // 메시지 메뉴의 "서버에서 동기화"로 완성본을 가져올 수 있다.
-            throwError('Stream connection lost. Use "Sync from Server" on the message to recover it.')
+            //
+            // throwError가 아니라 alertError를 쓴다. inlayErrorResponse가 켜져
+            // 있으면 throwError는 마지막 char 메시지에 risuerror 블록(~94자)을
+            // 덧붙이는데, 그 메시지가 바로 여기서 남겨두는 메시지다. 길이가
+            // 부풀면 동기화 쪽 길이 비교(서버 텍스트가 더 길어야 교체)가
+            // 막혀서 정작 온전한 응답을 가져올 수 없게 된다.
+            alertError('Stream connection lost. Use "Sync from Server" on the message to recover it.')
             return false
         }
 
