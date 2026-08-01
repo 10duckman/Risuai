@@ -9,14 +9,14 @@
 const DEFAULT_TARGET_TURNS = 25
 const DEFAULT_MAX_CHARS = 60000
 
-export interface ChunkMessage {
+export interface ChunkMessage{
     role: 'user' | 'char'
     data: string
     /** 원본 message 배열에서의 인덱스. fact의 msg 필드가 이것을 가리킨다. */
     index: number
 }
 
-export interface Chunk {
+export interface Chunk{
     messages: ChunkMessage[]
     startIndex: number
     endIndex: number
@@ -25,14 +25,14 @@ export interface Chunk {
 }
 
 /** 청크 하나의 텍스트를 만든다. `[12] char: ...` 형태. */
-function renderChunk(messages: ChunkMessage[]): string {
+function renderChunk(messages: ChunkMessage[]): string{
     return messages.map(m => `[${m.index}] ${m.role}: ${m.data}`).join('\n\n')
 }
 
 export function splitIntoChunks(
     messages: ChunkMessage[],
-    opts: { targetTurns?: number; maxChars?: number } = {},
-): Chunk[] {
+    opts: { targetTurns?: number, maxChars?: number } = {},
+): Chunk[]{
     const targetTurns = opts.targetTurns ?? DEFAULT_TARGET_TURNS
     const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS
 
@@ -41,7 +41,7 @@ export function splitIntoChunks(
     let currentChars = 0
 
     const flush = () => {
-        if (current.length === 0) {
+        if(current.length === 0){
             return
         }
         chunks.push({
@@ -54,10 +54,10 @@ export function splitIntoChunks(
         currentChars = 0
     }
 
-    for (const m of messages) {
+    for(const m of messages){
         const cost = m.data.length
         // 이미 담은 게 있고, 하나 더 넣으면 상한을 넘는다면 먼저 끊는다.
-        if (current.length > 0 && (current.length >= targetTurns || currentChars + cost > maxChars)) {
+        if(current.length > 0 && (current.length >= targetTurns || currentChars + cost > maxChars)){
             flush()
         }
         current.push(m)
