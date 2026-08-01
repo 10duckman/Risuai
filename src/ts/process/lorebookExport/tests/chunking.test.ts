@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { splitIntoChunks, type ChunkMessage } from '../chunking'
 
 /** n개의 메시지를 만든다. user/char 교대. */
-function makeMessages(n: number, charsEach = 100): ChunkMessage[] {
+function makeMessages(n: number, charsEach = 100): ChunkMessage[]{
     return Array.from({ length: n }, (_, i) => ({
         role: i % 2 === 0 ? 'user' as const : 'char' as const,
         data: 'x'.repeat(charsEach),
