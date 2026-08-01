@@ -32,6 +32,22 @@ function parseJson<T>(text: string): T | null{
     }
 }
 
+/**
+ * 파싱된 청크 응답이 ChunkResult 모양인지 확인한다.
+ *
+ * JSON.parse는 성공하지만 `{"error":"..."}`나 `[]`처럼 스키마와 무관한
+ * 값도 통과시킨다 — truthy 검사만으로는 이런 응답이 collected에도
+ * dropped에도 들어가지 않고 조용히 사라진다.
+ */
+function isChunkResultShape(value: unknown): value is ChunkResult{
+    if(!value || typeof value !== 'object' || Array.isArray(value)){
+        return false
+    }
+    const v = value as Record<string, unknown>
+    return Array.isArray(v.people) || Array.isArray(v.places)
+        || Array.isArray(v.state) || Array.isArray(v.objects)
+}
+
 export async function runExport(opts: RunOptions): Promise<ExportPreview>{
     const chunks = splitIntoChunks(opts.messages, { targetTurns: opts.targetTurns })
     if(chunks.length === 0){
@@ -53,6 +69,13 @@ export async function runExport(opts: RunOptions): Promise<ExportPreview>{
                 why: 'JSON 파싱 실패',
             })
         }
+        else if(!isChunkResultShape(parsed)){
+            // JSON은 파싱됐지만 스키마와 다른 형태 — 파싱 실패와는 구분해서 남긴다.
+            dropped.push({
+                what: `청크 ${chunk.startIndex}~${chunk.endIndex}`,
+                why: '예상과 다른 형태',
+            })
+        }
         else{
             const checked = validateChunkResult(parsed, chunk.text)
             collected.push(checked.result)
@@ -62,15 +85,24 @@ export async function runExport(opts: RunOptions): Promise<ExportPreview>{
         opts.onProgress?.(i + 1, chunks.length)
     }
 
+    // 살아남은 청크가 하나도 없으면 merge를 부를 이유가 없다 — 합칠 재료가
+    // 없는데 모델 호출 하나를 더 쓰고, 그 응답을 무조건 신뢰하게 된다.
+    if(collected.length === 0){
+        return buildPreview({ entries: [], dropped })
+    }
+
     const mergeInput = JSON.stringify(collected)
     const mergeRaw = await opts.requestChat(MERGE_PROMPT, mergeInput)
     const merged = parseJson<MergeResult>(mergeRaw)
-    if(!merged){
-        throw new Error('merge 응답을 파싱할 수 없습니다')
+    if(!merged || !Array.isArray(merged.entries)){
+        // 디버깅에 필요한 최소 정보 — 응답 길이와 앞부분 일부. 한 줄로 유지해
+        // alert 다이얼로그에서도 읽힌다.
+        const excerpt = mergeRaw.slice(0, 200)
+        throw new Error(`merge 응답을 파싱할 수 없습니다 (길이 ${mergeRaw.length}자): ${excerpt}`)
     }
 
     return buildPreview({
-        entries: merged.entries ?? [],
+        entries: merged.entries,
         dropped: [...dropped, ...(merged.dropped ?? [])],
     })
 }

@@ -145,4 +145,102 @@ describe('runExport', () => {
         const chunkCall = requestChat.mock.calls.find(c => !c[0].includes('합친다'))
         expect(chunkCall![1]).toContain('메시지 0')
     })
+
+    it('청크 응답이 파싱되지만 예상과 다른 형태면 파싱 실패와 구분해서 dropped에 담는다', async () => {
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? mergeResponse : '{"error":"model refused"}')
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        expect(preview.dropped.some(d => d.why.includes('형태'))).toBe(true)
+        expect(preview.dropped.some(d => d.why.includes('파싱'))).toBe(false)
+    })
+
+    it('merge 응답이 파싱되지만 entries가 배열이 아니면 던진다', async () => {
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? '{"ok":true}' : goodChunkResponse(0))
+
+        await expect(runExport({ messages: messages(25), requestChat }))
+            .rejects.toThrow(/merge/)
+    })
+
+    it('merge 파싱 실패 메시지에 응답 길이와 일부 내용이 담긴다', async () => {
+        const badMerge = '이건 JSON이 아닌 완전히 깨진 응답입니다'
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? badMerge : goodChunkResponse(0))
+
+        let caught: Error | undefined
+        try{
+            await runExport({ messages: messages(25), requestChat })
+        }
+        catch(e){
+            caught = e as Error
+        }
+
+        expect(caught).toBeDefined()
+        expect(caught!.message).toContain(String(badMerge.length))
+        expect(caught!.message).toContain(badMerge.slice(0, 10))
+    })
+
+    it('모든 청크가 실패하면 merge를 호출하지 않는다', async () => {
+        const requestChat = vi.fn().mockImplementation(async () => '이건 JSON이 아닙니다')
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        // 청크 1개, 모두 실패 — merge를 호출할 이유가 없다
+        expect(requestChat).toHaveBeenCalledTimes(1)
+        expect(preview.entries).toHaveLength(0)
+        expect(preview.dropped.length).toBeGreaterThan(0)
+    })
+
+    it('검증을 통과한 인물이 merge 호출의 원본 데이터에 포함된다', async () => {
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? mergeResponse : goodChunkResponse(0))
+
+        await runExport({ messages: messages(25), requestChat })
+
+        const mergeCall = requestChat.mock.calls.find(c => c[0].includes('합친다'))
+        expect(mergeCall![1]).toContain('김만세')
+    })
+
+    it('merge가 보고한 dropped 항목이 검증 단계의 dropped와 함께 preview에 남는다', async () => {
+        const droppedByValidation = JSON.stringify({
+            people: [{ name: '단역', slots: { Misc: [{ t: 'plain', v: '송진 냄새', src: '17년째 무직', msg: 0 }] } }],
+            places: [], state: [], objects: [],
+        })
+        const mergeWithDropped = JSON.stringify({
+            entries: [],
+            dropped: [{ what: '장소: 폐가', why: '한 번만 등장' }],
+        })
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? mergeWithDropped : droppedByValidation)
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        expect(preview.dropped.some(d => d.what.includes('단역'))).toBe(true)
+        expect(preview.dropped.some(d => d.what.includes('폐가'))).toBe(true)
+    })
+
+    it('실패한 청크에도 onProgress가 호출된다', async () => {
+        const onProgress = vi.fn()
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? JSON.stringify({ entries: [], dropped: [] }) : '이건 JSON이 아닙니다')
+
+        await runExport({ messages: messages(50), requestChat, onProgress, targetTurns: 25 })
+
+        // 청크 2개 모두 실패해도 진행 상황은 둘 다 알린다
+        expect(onProgress).toHaveBeenCalledWith(1, 2)
+        expect(onProgress).toHaveBeenCalledWith(2, 2)
+    })
+
+    it('targetTurns를 청크 분할에 반영한다', async () => {
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? JSON.stringify({ entries: [], dropped: [] }) : goodChunkResponse(0))
+
+        // targetTurns=10 → 50개 메시지가 5개 청크로 나뉜다 (기본값 25라면 2개)
+        await runExport({ messages: messages(50), requestChat, targetTurns: 10 })
+
+        // 청크 5개 + merge 1회
+        expect(requestChat).toHaveBeenCalledTimes(6)
+    })
 })
