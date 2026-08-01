@@ -6,13 +6,24 @@
  * 통과한다. 검사 대상은 출하되는 텍스트(v)여야 한다.
  */
 
-import type { DroppedItem, Fact, MergedEntry, PersonDraft } from './types'
+import type { ChunkResult, DroppedItem, Fact, MergedEntry, PersonDraft } from './types'
 
 export const ALWAYS_ON_LIMIT = 5000
 
-/** 평가어. 매치되면 그 fact를 버린다. */
+/**
+ * src 앵커의 최소 길이. 설계 스펙(5~60자)의 하한을 그대로 강제한다 — 빈
+ * 문자열이나 한두 글자짜리 앵커는 sourceText.includes()를 항상(또는 거의
+ * 항상) 통과시켜 검증 자체를 무력화한다. absence는 이 검사도 면제된다.
+ */
+const MIN_SRC_LENGTH = 5
+
+/**
+ * 평가어. 매치되면 그 fact를 버린다.
+ * 알려진 오탐(광범위한 어간 매칭의 트레이드오프로 받아들인다): 무심코, 똑같다,
+ * 물 같다, 불성실하다 등도 걸린다.
+ */
 export const EVALUATIVE_DENYLIST =
-    /무심|다정|순수|차갑|따뜻|냉정|헌신적|성실|가정적|착하|나쁘|훌륭|(적|스러운|로운)이다|한 편이다|경향이 있다|편이다|같다|보인다/
+    /무심|다정|순수|차갑|따뜻|냉정|헌신적|성실|가정적|착하|나쁘|훌륭|(적|스러운|로운)이다|경향이 있다|편이다|같다|보인다/
 
 /** 인물 통과 조건. */
 const MIN_TRIGGER_QUOTE = 3
@@ -25,7 +36,23 @@ function digitsOf(s: string): string[]{
 }
 
 /**
- * fact 하나를 검증한다. 1~3단계를 순서대로 적용한다.
+ * v에서 인용부호로 감싸인 구간들을 뽑는다. ASCII(")와 커브(" ") 인용부호를
+ * 모두 인정한다 — 한국어 문장에 커브 인용부호가 흔해서, ASCII만 인정하면
+ * 원문 그대로인 인용도 탈락한다.
+ *
+ * src 자체에 인용부호 문자가 들어있는 경우는 지원하지 않는다 — 지원하려면
+ * 탐욕적 매칭이 필요한데, 그러면 v 안에 서로 다른 두 인용이 있을 때 그 사이
+ * 전체를 하나로 묶어버려 더 흔한 경우(인용이 여러 개인 v)를 깨뜨린다.
+ */
+function extractQuoted(v: string): string[]{
+    const ascii = v.match(/"([^"]*)"/g) ?? []
+    const curly = v.match(/“([^”]*)”/g) ?? []
+    return [...ascii, ...curly].map(q => q.slice(1, -1))
+}
+
+/**
+ * fact 하나를 검증한다. 3 → 1 → 2 순서로 적용한다 — 평가어 탈락(3단계)을
+ * 가장 먼저 본다.
  */
 export function validateFact(fact: Fact, sourceText: string): boolean{
     // 3단계를 먼저 본다 — 평가어는 타입과 무관하게 즉시 탈락이다.
@@ -34,7 +61,9 @@ export function validateFact(fact: Fact, sourceText: string): boolean{
     }
 
     // 1단계: src verbatim. absence는 면제한다 (부재는 원문에 진술되지 않는다).
-    if(fact.t !== 'absence' && !sourceText.includes(fact.src)){
+    // 앵커 길이도 여기서 강제한다 — 빈 문자열은 sourceText.includes('')가
+    // 항상 true라서 검증을 통째로 무력화한다.
+    if(fact.t !== 'absence' && (fact.src.length < MIN_SRC_LENGTH || !sourceText.includes(fact.src))){
         return false
     }
 
@@ -45,13 +74,16 @@ export function validateFact(fact: Fact, sourceText: string): boolean{
             if(srcDigits.length === 0){
                 return false
             }
-            // src의 숫자 중 하나라도 v에 나타나야 한다.
-            return srcDigits.some(d => fact.v.includes(d))
+            const vDigits = digitsOf(fact.v)
+            // src의 숫자 런과 v의 숫자 런이 정확히 일치해야 한다 — 부분
+            // 문자열 매치는 170이 17을 포함하는 식으로 자릿수를 부풀릴 수 있다.
+            return srcDigits.some(d => vDigits.includes(d))
         }
         case 'quote':{
-            // src 전문이 v의 인용부호 안에 글자 그대로 있어야 한다.
-            const quoted = fact.v.match(/"([^"]*)"/g) ?? []
-            return quoted.some(q => q.slice(1, -1).includes(fact.src))
+            // src 전문이 v의 인용부호 안에 (트림 후) 정확히 일치해야 한다.
+            // includes였다면 인용 뒤에 날조를 이어붙여도 통과했다.
+            const quoted = extractQuoted(fact.v)
+            return quoted.some(q => q.trim() === fact.src.trim())
         }
         case 'trigger':{
             // 조건부와 반응부가 구분자로 나뉘어야 한다.
@@ -83,6 +115,12 @@ export function validatePerson(
     person: PersonDraft,
     sourceText: string,
 ): { person: PersonDraft | null, reason?: string }{
+    // slots가 없는 인물(LLM JSON 오류)은 형제 필드들처럼 ?? []로 감쌀 수 없다
+    // — Object.entries(undefined)가 던진다. 여기서 걸러서 원인을 밝힌다.
+    if(!person.slots){
+        return { person: null, reason: 'slots 필드 없음' }
+    }
+
     const slots = filterSlots(person.slots, sourceText)
     const all = Object.values(slots).flat()
 
@@ -90,8 +128,12 @@ export function validatePerson(
     if(triggerQuote < MIN_TRIGGER_QUOTE){
         return { person: null, reason: `trigger+quote ${triggerQuote}개 (최소 ${MIN_TRIGGER_QUOTE})` }
     }
-    if(all.length < MIN_FACTS){
-        return { person: null, reason: `fact ${all.length}개 (최소 ${MIN_FACTS})` }
+    // absence는 검증(1단계)이 면제되어 있으므로 최소 fact 수에는 넣지 않는다
+    // — 그러지 않으면 미검증 주장으로 쿼터의 절반 넘게 채울 수 있다. 결과에는
+    // 그대로 남긴다 (merge 단계로 넘겨야 하니까).
+    const countable = all.filter(f => f.t !== 'absence')
+    if(countable.length < MIN_FACTS){
+        return { person: null, reason: `fact ${countable.length}개 (최소 ${MIN_FACTS})` }
     }
     const filledSlots = Object.values(slots).filter(fs => fs.length > 0).length
     if(filledSlots < MIN_SLOTS){
@@ -103,9 +145,9 @@ export function validatePerson(
 
 /** 청크 결과 전체를 검증한다. */
 export function validateChunkResult(
-    result: { people: PersonDraft[], places: { name: string, facts: Fact[] }[], state: Fact[], objects: { name: string, aliases?: string[], facts: Fact[] }[] },
+    result: ChunkResult,
     sourceText: string,
-){
+): { result: ChunkResult, dropped: DroppedItem[] }{
     const dropped: DroppedItem[] = []
 
     const people: PersonDraft[] = []
