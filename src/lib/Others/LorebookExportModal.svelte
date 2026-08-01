@@ -23,6 +23,18 @@
     let preview: ExportPreview | null = $state(null)
     let recentTurns = $state(0)
 
+    // 모달을 열 때의 신원을 고정한다. 추출은 수 분이 걸리고 그 사이 채팅이
+    // 삭제되면 인덱스가 앞으로 밀린다 (SideChatList/ChatList의 splice) —
+    // 인덱스를 다시 쓰면 엉뚱한 채팅의 localLore에 조용히 써버린다.
+    // 초기값만 잡는 것이 의도다.
+    // svelte-ignore state_referenced_locally
+    const pinnedCharId = DBState.db.characters[charIndex].chaId
+    // 구버전 채팅은 id가 없을 수 있다. bootstrap의 assignIds가 시작 시 채워주므로
+    // 실제로는 거의 없지만, 없을 때의 인덱스 폴백은 위 시나리오를 막지 못한다 —
+    // 검증할 방법이 없는 폴백이다.
+    // svelte-ignore state_referenced_locally
+    const pinnedChatId = DBState.db.characters[charIndex].chats[chatIndex].id
+
     const chat = $derived(DBState.db.characters[charIndex].chats[chatIndex])
     const totalMessages = $derived(chat.message.length)
 
@@ -127,8 +139,19 @@
 
     function apply(){
         if(!preview) return
-        const char = DBState.db.characters[charIndex]
-        const target = char.chats[chatIndex]
+
+        // 인덱스가 아니라 고정해둔 신원으로 다시 찾는다. 못 찾으면 아무것도
+        // 쓰지 않는다 — 엉뚱한 곳에 조용히 쓰는 것이 막아야 할 결과다.
+        const char = DBState.db.characters.find(c => c.chaId === pinnedCharId)
+        const target = pinnedChatId
+            ? char?.chats.find(c => c.id === pinnedChatId)
+            : char?.chats[chatIndex]
+        if(!char || !target){
+            alertError(language.lorebookExportTargetGone)
+            onClose()
+            return
+        }
+
         char.globalLore ??= []
         target.localLore ??= []
 
@@ -146,7 +169,7 @@
             added++
         })
 
-        DBState.db.characters[charIndex].reloadKeys += 1
+        char.reloadKeys += 1
         alertNormal(language.lorebookExportApplied(added))
         onClose()
     }
@@ -183,21 +206,22 @@
 
         {:else if stage === 'preview' && preview}
             {#if preview.entries.length === 0}
-                <span class="text-textcolor2">{language.lorebookExportEmpty}</span>
-            {:else}
-                {#if preview.alwaysOnOverflow}
-                    <div class="text-yellow-400 text-sm mb-3">
-                        {language.lorebookExportOverflow(preview.alwaysOnChars, ALWAYS_ON_LIMIT)}
-                    </div>
-                {/if}
-                <div class="flex-1 overflow-y-auto">
+                <span class="text-textcolor2 mb-2">{language.lorebookExportEmpty}</span>
+            {/if}
+            {#if preview.alwaysOnOverflow}
+                <div class="text-yellow-400 text-sm mb-3">
+                    {language.lorebookExportOverflow(preview.alwaysOnChars, ALWAYS_ON_LIMIT)}
+                </div>
+            {/if}
+            <div class="flex-1 overflow-y-auto">
+                {#if preview.entries.length > 0}
                     {#each preview.entries as entry, i}
                         <div class="border-darkborderc border rounded-md p-3 mb-2">
                             <div class="flex items-center mb-2">
                                 <span class="font-bold flex-1">{entry.comment}</span>
                                 <span class="text-textcolor2 text-xs">
-                                    {entry.category} · {entry.content.length}자
-                                    {entry.alwaysActive ? ' · always-on' : ''}
+                                    {language.lorebookExportCategory[entry.category]} · {language.lorebookExportChars(entry.content.length)}
+                                    {entry.alwaysActive ? ` · ${language.lorebookExportAlwaysOn}` : ''}
                                 </span>
                             </div>
                             <pre class="text-xs text-textcolor2 whitespace-pre-wrap max-h-32 overflow-y-auto mb-2">{entry.content}</pre>
@@ -212,20 +236,24 @@
                             </div>
                         </div>
                     {/each}
+                {/if}
 
-                    {#if preview.dropped.length > 0}
-                        <details class="mt-3">
-                            <summary class="text-textcolor2 text-sm cursor-pointer">
-                                {language.lorebookExportDropped} ({preview.dropped.length})
-                            </summary>
-                            <ul class="text-xs text-textcolor2 mt-2">
-                                {#each preview.dropped as d}
-                                    <li>{d.what} — {d.why}</li>
-                                {/each}
-                            </ul>
-                        </details>
-                    {/if}
-                </div>
+                <!-- 항목이 하나도 안 남았을 때가 이 목록이 가장 필요한 순간이다 —
+                     조연이 얇았던 것과 검증 버그를 구별할 유일한 단서다. -->
+                {#if preview.dropped.length > 0}
+                    <details class="mt-3" open={preview.entries.length === 0}>
+                        <summary class="text-textcolor2 text-sm cursor-pointer">
+                            {language.lorebookExportDropped} ({preview.dropped.length})
+                        </summary>
+                        <ul class="text-xs text-textcolor2 mt-2">
+                            {#each preview.dropped as d}
+                                <li>{d.what} — {d.why}</li>
+                            {/each}
+                        </ul>
+                    </details>
+                {/if}
+            </div>
+            {#if preview.entries.length > 0}
                 <button class="border-darkborderc border py-2 px-4 rounded-md hover:ring-2 mt-3" onclick={apply}>
                     {language.lorebookExportApply}
                 </button>
