@@ -21,6 +21,24 @@ export const INSERT_ORDER: Record<EntryCategory, number> = {
 }
 
 /**
+ * LLM이 보낸 category를 알려진 넷 중 하나로 정규화한다.
+ *
+ * 실측: merge가 category를 아예 빼먹은 응답을 냈다 (14개 항목 전부 undefined).
+ * 그러면 INSERT_ORDER[undefined]가 undefined가 되어 로어북에 undefined
+ * insertorder가 저장되고, defaultDestination도 전부 local로 떨어진다
+ * (장소는 global이 맞다). UI의 분류 라벨도 undefined로 렌더된다.
+ *
+ * 폴백을 object로 두는 이유: 넷 중 유일하게 always-on이 아니다. 정체를 모르는
+ * 항목을 매 턴 주입하는 것보다 키워드로 두는 쪽이 안전하다.
+ */
+export function normalizeCategory(value: unknown): EntryCategory{
+    return value === 'person' || value === 'place'
+        || value === 'state' || value === 'object'
+        ? value
+        : 'object'
+}
+
+/**
  * MergedEntry에서 loreBook으로. category는 RisuAI 타입에 없으므로 뺀다.
  *
  * insertorder는 LLM이 보낸 값을 쓰지 않고 category로 강제한다 — merge가
@@ -31,7 +49,7 @@ export function toLoreBook(entry: MergedEntry): LoreBookEntry{
     return {
         key: entry.key,
         secondkey: entry.secondkey,
-        insertorder: INSERT_ORDER[entry.category],
+        insertorder: INSERT_ORDER[normalizeCategory(entry.category)],
         comment: entry.comment,
         content: entry.content,
         mode: entry.mode,
@@ -53,11 +71,15 @@ export function defaultDestination(category: EntryCategory): EntryDestination{
 }
 
 export function buildPreview(merge: MergeResult): ExportPreview{
-    const budget = checkAlwaysOnBudget(merge.entries)
+    // category를 여기서 한 번 정규화한다 — 미리보기와 toLoreBook이 모두 이
+    // 결과를 쓰므로, 쓰레기 값이 insertorder와 목적지로 새어나가는 경로를
+    // 한 곳에서 막는다.
+    const entries = merge.entries.map(e => ({ ...e, category: normalizeCategory(e.category) }))
+    const budget = checkAlwaysOnBudget(entries)
     return {
-        entries: merge.entries,
+        entries,
         dropped: merge.dropped,
-        destinations: merge.entries.map(e => defaultDestination(e.category)),
+        destinations: entries.map(e => defaultDestination(e.category)),
         alwaysOnChars: budget.chars,
         alwaysOnOverflow: budget.overflow,
     }

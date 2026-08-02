@@ -140,4 +140,46 @@ describe('buildPreview', () => {
         expect(preview.alwaysOnChars).toBe(0)
         expect(preview.alwaysOnOverflow).toBe(false)
     })
+
+    it('category가 없으면 object로 정규화한다', () => {
+        // 실측: merge가 category를 아예 빼먹은 응답을 냈다 (14개 전부 undefined).
+        // 그대로 두면 INSERT_ORDER[undefined]가 undefined가 되어 로어북에
+        // undefined insertorder가 저장된다.
+        const preview = buildPreview({
+            entries: [entry({ category: undefined as unknown as MergedEntry['category'] })],
+            dropped: [],
+        })
+
+        expect(preview.entries[0].category).toBe('object')
+        expect(toLoreBook(preview.entries[0]).insertorder).toBe(INSERT_ORDER.object)
+        expect(preview.destinations[0]).toBe('local')
+    })
+
+    it('알 수 없는 category도 object로 정규화한다', () => {
+        const preview = buildPreview({
+            entries: [entry({ category: 'protagonist' as unknown as MergedEntry['category'] })],
+            dropped: [],
+        })
+
+        expect(preview.entries[0].category).toBe('object')
+    })
+
+    it('정상 category는 건드리지 않는다', () => {
+        const preview = buildPreview({
+            entries: [entry({ category: 'place' })],
+            dropped: [],
+        })
+
+        expect(preview.entries[0].category).toBe('place')
+        expect(preview.destinations[0]).toBe('global')
+        expect(toLoreBook(preview.entries[0]).insertorder).toBe(INSERT_ORDER.place)
+    })
+
+    it('toLoreBook 단독 호출에서도 쓰레기 category가 새지 않는다', () => {
+        // buildPreview를 거치지 않는 경로가 생겨도 undefined insertorder는 막는다.
+        const lb = toLoreBook(entry({ category: undefined as unknown as MergedEntry['category'] }))
+
+        expect(lb.insertorder).toBe(INSERT_ORDER.object)
+        expect(lb.insertorder).not.toBeUndefined()
+    })
 })
