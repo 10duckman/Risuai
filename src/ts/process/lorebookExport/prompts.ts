@@ -75,7 +75,30 @@ export const CHUNK_PROMPT = `대화 기록에서 로어북 항목의 재료를 �
 
 ## 형식
 
-JSON. 스키마는 별도로 주어진다. 설명이나 서론 없이 JSON만 출력한다.`
+설명이나 서론 없이 JSON만 출력한다. 아래 필드명을 **글자 그대로** 쓴다 —
+\`people\`을 \`characters\`로, \`t\`를 \`type\`으로 바꾸면 결과가 버려진다.
+
+\`\`\`json
+{
+  "people": [
+    { "name": "이름", "aliases": ["별칭"],
+      "slots": { "Identity": [{ "t": "num", "v": "41세", "src": "원문 조각", "msg": 12 }] } }
+  ],
+  "places": [
+    { "name": "장소명", "facts": [{ "t": "plain", "v": "붉은 네온", "src": "원문 조각", "msg": 30 }] }
+  ],
+  "state": [{ "t": "num", "v": "만난 지 3개월", "src": "원문 조각", "msg": 41 }],
+  "objects": [
+    { "name": "사물명", "aliases": ["별칭"],
+      "facts": [{ "t": "quote", "v": "\\"대사\\"", "src": "원문 조각", "msg": 52 }] }
+  ]
+}
+\`\`\`
+
+- 최상위는 \`people\` / \`places\` / \`state\` / \`objects\` 네 개. 없으면 빈 배열.
+- 인물만 \`slots\`(라벨 → fact 배열)를 쓴다. 장소·사물은 \`facts\`(fact 배열)다.
+- fact의 키는 \`t\` \`v\` \`src\` \`msg\`. \`t\`는 위 여섯 값 중 하나.
+- \`msg\`는 그 fact가 나온 메시지의 \`[번호]\`다.`
 
 /** 전체 청크 결과를 받아 1회 실행. */
 export const MERGE_PROMPT = `여러 구간에서 추출된 fact들을 로어북 항목으로 합친다.
@@ -131,105 +154,21 @@ fact를 문장으로 다듬지 마라. \`41세. 남성. 자칭 화가. 17년 무
 
 ## 형식
 
-JSON. 스키마는 별도로 주어진다. JSON만 출력한다.`
+JSON만 출력한다. 아래 필드명을 **글자 그대로** 쓴다.
 
-export const CHUNK_SCHEMA = {
-    type: 'object',
-    properties: {
-        people: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    name: { type: 'string' },
-                    aliases: { type: 'array', items: { type: 'string' } },
-                    slots: {
-                        type: 'object',
-                        additionalProperties: {
-                            type: 'array',
-                            items: { $ref: '#/$defs/fact' },
-                        },
-                    },
-                },
-                required: ['name', 'slots'],
-            },
-        },
-        places: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    name: { type: 'string' },
-                    facts: { type: 'array', items: { $ref: '#/$defs/fact' } },
-                },
-                required: ['name', 'facts'],
-            },
-        },
-        state: { type: 'array', items: { $ref: '#/$defs/fact' } },
-        objects: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    name: { type: 'string' },
-                    aliases: { type: 'array', items: { type: 'string' } },
-                    facts: { type: 'array', items: { $ref: '#/$defs/fact' } },
-                },
-                required: ['name', 'facts'],
-            },
-        },
-    },
-    required: ['people', 'places', 'state', 'objects'],
-    $defs: {
-        fact: {
-            type: 'object',
-            properties: {
-                t: { enum: ['num', 'quote', 'trigger', 'habit', 'absence', 'plain'] },
-                v: { type: 'string', maxLength: 200 },
-                src: { type: 'string', minLength: 5, maxLength: 60 },
-                msg: { type: 'integer' },
-            },
-            required: ['t', 'v', 'src', 'msg'],
-        },
-    },
-} as const
+\`\`\`json
+{
+  "entries": [
+    { "comment": "만세", "content": "### 만세 — ...\\n- Identity: 41세. 자칭 화가.",
+      "key": "", "secondkey": "", "insertorder": 100, "mode": "normal",
+      "alwaysActive": true, "selective": false, "useRegex": false,
+      "category": "person" }
+  ],
+  "dropped": [{ "what": "버린 것", "why": "이유" }]
+}
+\`\`\`
 
-export const MERGE_SCHEMA = {
-    type: 'object',
-    properties: {
-        entries: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    comment: { type: 'string' },
-                    content: { type: 'string' },
-                    key: { type: 'string' },
-                    secondkey: { type: 'string' },
-                    insertorder: { type: 'integer' },
-                    mode: { enum: ['normal', 'constant', 'multiple'] },
-                    alwaysActive: { type: 'boolean' },
-                    selective: { type: 'boolean' },
-                    useRegex: { type: 'boolean' },
-                    category: { enum: ['person', 'place', 'state', 'object'] },
-                },
-                required: [
-                    'comment', 'content', 'key', 'insertorder', 'mode',
-                    'alwaysActive', 'selective', 'useRegex', 'category',
-                ],
-            },
-        },
-        dropped: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    what: { type: 'string' },
-                    why: { type: 'string' },
-                },
-                required: ['what', 'why'],
-            },
-        },
-    },
-    required: ['entries', 'dropped'],
-} as const
+- \`category\`는 \`person\` / \`place\` / \`state\` / \`object\` 중 하나.
+- \`mode\`는 \`normal\` / \`constant\` / \`multiple\` 중 하나.
+- 입력은 청크별 추출 결과의 배열이다. 각 원소가 \`people\` / \`places\` /
+  \`state\` / \`objects\`를 갖고, fact의 키는 \`t\` \`v\` \`src\` \`msg\`다.`
