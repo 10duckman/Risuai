@@ -1452,7 +1452,7 @@ export const languageKorean = {
     "lorebookExportDiscard": "버리기",
     "lorebookExportApply": "선택한 항목 추가",
     "lorebookExportApplied": (n:number) => `${n}개 항목을 추가했습니다.`,
-    "lorebookExportOverflow": (chars:number, limit:number) => `상시 활성 항목이 ${chars}자입니다 (권장 ${limit}자). 일부를 버리거나 채팅 로어북으로 옮기세요.`,
+    "lorebookExportOverflow": (chars:number, limit:number) => `상시 활성 항목이 ${chars}자입니다 (권장 ${limit}자). 매 턴 주입되는 양입니다 — 일부를 버리거나, 추가한 뒤 로어북 편집에서 '상시 활성'을 끄고 키워드를 지정하세요.`,
     "lorebookExportRange": "추출 범위",
     "lorebookExportRangeAll": "전체 대화",
     "lorebookExportRangeRecent": (n:number) => `최근 ${n}턴`,

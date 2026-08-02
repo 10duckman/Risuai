@@ -1581,7 +1581,7 @@ export const languageEnglish = {
     lorebookExportDiscard: "Discard",
     lorebookExportApply: "Add Selected",
     lorebookExportApplied: (n:number) => `Added ${n} entries.`,
-    lorebookExportOverflow: (chars:number, limit:number) => `Always-active entries total ${chars} characters (recommended ${limit}). Discard some or move them to the chat lorebook.`,
+    lorebookExportOverflow: (chars:number, limit:number) => `Always-active entries total ${chars} characters (recommended ${limit}) — injected on every turn. Discard some, or turn off "always active" and set keywords in the lorebook editor after adding them.`,
     lorebookExportRange: "Range",
     lorebookExportRangeAll: "Entire conversation",
     lorebookExportRangeRecent: (n:number) => `Last ${n} turns`,
