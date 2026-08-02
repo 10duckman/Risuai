@@ -33,7 +33,7 @@ describe('toLoreBook', () => {
 
     it('category는 loreBook에 넘기지 않는다', () => {
         // category는 미리보기 분류용이고 RisuAI 타입에는 없다.
-        const lb = toLoreBook(entry()) as Record<string, unknown>
+        const lb = toLoreBook(entry()) as unknown as Record<string, unknown>
 
         expect('category' in lb).toBe(false)
     })
