@@ -1210,14 +1210,10 @@ Example: <img src="{{ele::{{chardisplayasset}}::0}}">
 <Image Tag Instruction>
 `
 
-export const jsonOutputTrimmer = (data:string) => {
-    
-    data = data.replace(/<Thoughts>(.+?)<\/Thoughts>/gms, '').trim()
-    if(data.startsWith('```json') && data.endsWith('```')){
-        data = data.slice(7, -3).trim()
-    }
-    return data.trim()
-}
+// jsonOutputTrimmer는 src/ts/util/jsonOutputTrimmer.ts로 옮겼다 — DOM/DBState를
+// 모르는 순수 함수라서, 그것만 필요한 소비자(lorebookExport)가 이 무거운
+// util.ts 전체를 끌어오지 않게 하기 위함이다. 기존 소비자를 위해 재수출한다.
+export { jsonOutputTrimmer } from './util/jsonOutputTrimmer'
 
 export function asBuffer(arr: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBuffer>;
 export function asBuffer(arr: ArrayBufferLike): ArrayBuffer;

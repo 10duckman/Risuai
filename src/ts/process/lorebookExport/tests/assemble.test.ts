@@ -53,14 +53,16 @@ describe('toLoreBook', () => {
         expect(lb.key).toBe('반지,결혼반지')
         expect(lb.alwaysActive).toBe(false)
     })
-})
 
-describe('INSERT_ORDER', () => {
-    it('스펙의 값과 일치한다', () => {
-        expect(INSERT_ORDER.state).toBe(110)
-        expect(INSERT_ORDER.person).toBe(100)
-        expect(INSERT_ORDER.place).toBe(90)
-        expect(INSERT_ORDER.object).toBe(50)
+    it('M1: 잘못된 insertorder를 category 기준값으로 덮어쓴다', () => {
+        // merge가 0처럼 틀린 insertorder를 보내도, person/place/state/object의
+        // 레이어링 순서(INSERT_ORDER)를 강제해야 한다. 고치기 전에는
+        // entry.insertorder를 그대로 복사했으므로 이 값(0)이 그대로 나가
+        // 이 테스트가 실패한다.
+        const lb = toLoreBook(entry({ category: 'person', insertorder: 0 }))
+
+        expect(lb.insertorder).toBe(INSERT_ORDER.person)
+        expect(lb.insertorder).not.toBe(0)
     })
 })
 

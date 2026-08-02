@@ -9,7 +9,9 @@ import { splitIntoChunks, type ChunkMessage } from './chunking'
 import { CHUNK_PROMPT, MERGE_PROMPT } from './prompts'
 import { validateChunkResult } from './validate'
 import { buildPreview } from './assemble'
-import type { ChunkResult, DroppedItem, ExportPreview, MergeResult } from './types'
+import { EVALUATIVE_DENYLIST } from './validate'
+import { jsonOutputTrimmer } from 'src/ts/util/jsonOutputTrimmer'
+import type { ChunkResult, DroppedItem, ExportPreview, MergeResult, MergedEntry } from './types'
 
 /** (프롬프트, 원문) → 모델 응답 텍스트. */
 export type RequestChatFn = (prompt: string, sourceText: string) => Promise<string>
@@ -21,9 +23,17 @@ export interface RunOptions{
     targetTurns?: number
 }
 
-/** 코드블록으로 감싼 JSON도 파싱한다. 모델이 종종 그렇게 낸다. */
+/**
+ * 코드블록으로 감싼 JSON, 그리고 그 앞에 붙는 `<Thoughts>` 블록을 걷어내고
+ * 파싱한다. thinking이 켜진 모델(Opus 5 Bedrock 기본값)은 응답을
+ * `<Thoughts>...</Thoughts>`로 시작하므로, 이걸 벗기지 않으면 모든 청크가
+ * JSON.parse에서 깨진다. jsonOutputTrimmer(원래 util.ts:1213, 이제
+ * src/ts/util/jsonOutputTrimmer.ts로 분리된 leaf 모듈)에 위임한다 — util.ts는
+ * DBState/Tauri/Svelte 컴포넌트를 끌어오는 무거운 모듈이라 그대로 import하면
+ * DOM/DBState 없이 도는 이 모듈의 vitest가 $effect 컨텍스트 밖에서 깨진다.
+ */
 function parseJson<T>(text: string): T | null{
-    const stripped = text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')
+    const stripped = jsonOutputTrimmer(text)
     try{
         return JSON.parse(stripped) as T
     }
@@ -101,8 +111,26 @@ export async function runExport(opts: RunOptions): Promise<ExportPreview>{
         throw new Error(`merge 응답을 파싱할 수 없습니다 (길이 ${mergeRaw.length}자): ${excerpt}`)
     }
 
-    return buildPreview({
-        entries: merged.entries,
-        dropped: [...dropped, ...(merged.dropped ?? [])],
-    })
+    // C2/M5: chunk 단계의 fact 검증은 chunk 원문에서만 돌았다 — merge 모델이
+    // content를 새로 쓰면서 그 검증을 우회해 평가어를 다시 끼워넣거나(C2)
+    // content 자체를 빼먹을(M5) 수 있다. 출하되는 것은 content이므로 그것을
+    // 다시 검사한다. 평가어 매치는 하나라도 있으면 항목 전체를 버린다 —
+    // "요약이 아니라 사실"이 이 기능의 존재 이유이므로(design doc) 부분
+    // 오염을 허용하지 않는다.
+    const finalDropped = [...dropped, ...(merged.dropped ?? [])]
+    const entries: MergedEntry[] = []
+    for(const entry of merged.entries){
+        if(!entry.content){
+            finalDropped.push({ what: `항목: ${entry.comment}`, why: 'content 없음' })
+            continue
+        }
+        const match = entry.content.match(EVALUATIVE_DENYLIST)
+        if(match){
+            finalDropped.push({ what: `항목: ${entry.comment}`, why: `평가어 포함 ("${match[0]}")` })
+            continue
+        }
+        entries.push(entry)
+    }
+
+    return buildPreview({ entries, dropped: finalDropped })
 }

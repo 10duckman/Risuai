@@ -174,10 +174,17 @@ export function validateChunkResult(
     return { result: { people, places, state, objects }, dropped }
 }
 
-/** always-on 총량을 검사한다. */
+/**
+ * always-on 총량을 검사한다.
+ *
+ * M5: merge 모델이 content 없는 항목을 낼 수 있다. run.ts는 그런 항목을
+ * buildPreview 이전에 걸러내지만(C2와 같은 판단 — content 없으면 기여할 것이
+ * 없으므로 버린다), 이 함수 자체도 그 전제 없이 안전해야 한다 — 그러지 않으면
+ * 다른 호출부가 생겼을 때 e.content.length가 조용히 TypeError로 죽는다.
+ */
 export function checkAlwaysOnBudget(entries: MergedEntry[]): { chars: number, overflow: boolean }{
     const chars = entries
         .filter(e => e.alwaysActive)
-        .reduce((s, e) => s + e.content.length, 0)
+        .reduce((s, e) => s + (e.content?.length ?? 0), 0)
     return { chars, overflow: chars > ALWAYS_ON_LIMIT }
 }

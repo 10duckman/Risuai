@@ -119,6 +119,98 @@ describe('runExport', () => {
         expect(preview.entries).toHaveLength(1)
     })
 
+    it('C1: <Thoughts> 블록이 붙은 순수 JSON(코드블록 없음)도 파싱한다', async () => {
+        // thinking이 기본으로 켜지는 모델(Opus 5 Bedrock)의 응답은
+        // <Thoughts>...</Thoughts>로 시작한다. HEAD의 parseJson은 이걸
+        // 전혀 벗기지 않으므로 이 테스트는 HEAD 기준으로 실패한다 —
+        // JSON.parse가 앞의 <Thoughts> 텍스트 때문에 깨져 청크가 dropped로
+        // 빠지고, entries가 0개가 된다.
+        const withThoughts = (json: string) => `<Thoughts>\n추론 중...\n</Thoughts>\n${json}`
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? withThoughts(mergeResponse) : withThoughts(goodChunkResponse(0)))
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        expect(preview.entries).toHaveLength(1)
+    })
+
+    it('C1: <Thoughts> 블록이 붙은 코드블록(json 태그) JSON도 파싱한다', async () => {
+        // 위와 같은 이유로 HEAD 기준 실패한다 — <Thoughts>가 앞에 있으면
+        // HEAD의 fence-strip 정규식(^```(?:json)?\s*)이 문자열 맨 앞에서만
+        // 매치되므로 전혀 벗겨지지 않는다.
+        const withThoughtsFenced = (json: string) =>
+            `<Thoughts>\n추론 중...\n</Thoughts>\n\`\`\`json\n${json}\n\`\`\``
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? withThoughtsFenced(mergeResponse) : withThoughtsFenced(goodChunkResponse(0)))
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        expect(preview.entries).toHaveLength(1)
+    })
+
+    it('C1: 언어 태그 없는 코드블록(bare fence)도 파싱한다', async () => {
+        // 작업 시작 시점의 깨진 작업 트리(util.ts의 jsonOutputTrimmer에
+        // 그대로 위임한 버전)를 기준으로 실패한다 — 그 함수는
+        // data.startsWith('```json')만 검사해서 언어 태그 없는 ```만 있는
+        // 코드블록은 벗기지 못하고 JSON.parse가 깨진다. (HEAD 자체는 이
+        // 케이스를 이미 지원했으므로, 이 테스트는 "이 fix wave에서 옮기며
+        // 잃지 말아야 할 커버리지"를 고정한다.)
+        const bareFenced = (json: string) => `\`\`\`\n${json}\n\`\`\``
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? bareFenced(mergeResponse) : bareFenced(goodChunkResponse(0)))
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        expect(preview.entries).toHaveLength(1)
+    })
+
+    it('C2: merge가 낸 content에 평가어가 있으면 그 항목을 dropped로 돌린다', async () => {
+        // fix 전 run.ts는 merged.entries를 검증 없이 그대로 buildPreview에
+        // 넘겼다 — chunk 단계 검증은 chunk 원문(fact.src/v)만 봤을 뿐,
+        // merge가 새로 쓴 content는 아무도 다시 보지 않았다. 이 테스트는
+        // EVALUATIVE_DENYLIST가 실제로 content에 적용되는지 확인한다.
+        // fix 전: preview.entries에 그대로 실려 나가 이 테스트가 실패한다.
+        const mergeWithEvaluative = JSON.stringify({
+            entries: [{
+                comment: '김만세',
+                content: '### 김만세 — 무심한 남편\n- Personality: 무심하다. 다정하지 않다. 게으른 편이다.',
+                key: '', secondkey: '', insertorder: 100, mode: 'normal',
+                alwaysActive: true, selective: false, useRegex: false, category: 'person',
+            }],
+            dropped: [],
+        })
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? mergeWithEvaluative : goodChunkResponse(0))
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        expect(preview.entries).toHaveLength(0)
+        expect(preview.dropped.some(d => d.what.includes('김만세') && d.why.includes('평가어'))).toBe(true)
+    })
+
+    it('M5: content 없는 merge 항목은 TypeError 없이 dropped로 처리된다', async () => {
+        // fix 전: buildPreview -> checkAlwaysOnBudget이 e.content.length를
+        // 무조건 호출해서, content가 없는 항목(JSON.stringify가 undefined
+        // 필드를 통째로 빼버린 경우)을 만나면 던진다 — runExport 전체가
+        // reject된다. 이 테스트는 그 예외 없이 정상적으로 미리보기가 나오고,
+        // 그 항목이 dropped에 이유와 함께 남는지 확인한다.
+        const mergeNoContent = JSON.stringify({
+            entries: [{
+                comment: '김만세',
+                key: '', secondkey: '', insertorder: 100, mode: 'normal',
+                alwaysActive: true, selective: false, useRegex: false, category: 'person',
+            }],
+            dropped: [],
+        })
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? mergeNoContent : goodChunkResponse(0))
+
+        const preview = await runExport({ messages: messages(25), requestChat })
+
+        expect(preview.entries).toHaveLength(0)
+        expect(preview.dropped.some(d => d.what.includes('김만세') && d.why.includes('content'))).toBe(true)
+    })
+
     it('merge 응답이 깨지면 던진다', async () => {
         const requestChat = vi.fn().mockImplementation(async (p: string) =>
             p.includes('합친다') ? '실패' : goodChunkResponse(0))

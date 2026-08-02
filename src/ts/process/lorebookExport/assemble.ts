@@ -20,12 +20,18 @@ export const INSERT_ORDER: Record<EntryCategory, number> = {
     object: 50,
 }
 
-/** MergedEntry에서 loreBook으로. category는 RisuAI 타입에 없으므로 뺀다. */
+/**
+ * MergedEntry에서 loreBook으로. category는 RisuAI 타입에 없으므로 뺀다.
+ *
+ * insertorder는 LLM이 보낸 값을 쓰지 않고 category로 강제한다 — merge가
+ * 잘못된(예: 0) insertorder를 내면 person/place/state 레이어링이 조용히
+ * 무너지기 때문이다. INSERT_ORDER가 신뢰 가능한 유일한 소스다.
+ */
 export function toLoreBook(entry: MergedEntry): LoreBookEntry{
     return {
         key: entry.key,
         secondkey: entry.secondkey,
-        insertorder: entry.insertorder,
+        insertorder: INSERT_ORDER[entry.category],
         comment: entry.comment,
         content: entry.content,
         mode: entry.mode,

@@ -9,6 +9,18 @@
     import type { EntryDestination, ExportPreview } from 'src/ts/process/lorebookExport/types'
     import { DBState } from 'src/ts/stores.svelte'
     import { XIcon } from '@lucide/svelte'
+    import { v4 } from 'uuid'
+
+    /**
+     * 응답 하나가 인물 여러 명의 슬롯(각 2,000~3,000자, design doc)을 JSON으로
+     * 담을 수 있다 — 코드 기본값(300)이나 db.maxResponse로는 매 청크가 중간에
+     * 잘린다(I2). translator.ts:558과 같은 이유로 명시적 값을 준다.
+     * thinking이 기본으로 켜지는 모델(Opus 5 Bedrock)은 사고 내용도 같은
+     * max_tokens 예산을 나눠 쓰므로, JSON 본문 여유분 위에 사고분까지
+     * 감안해 넉넉히 잡는다. anthropic.ts:806의 8192 초과 시 128k 베타 헤더가
+     * 자동으로 붙으므로 이 값을 그대로 써도 막히지 않는다.
+     */
+    const EXPORT_MAX_TOKENS = 16000
 
     interface Props {
         charIndex: number
@@ -81,6 +93,14 @@
      * converse-stream 경로(anthropic.ts)는 이 플래그를 보지 않고 항상 게이트웨이
      * SSE 스트림을 돌려준다. 이 포크의 주 경로가 그것이라 streaming을 실패로
      * 취급하면 모든 추출이 실패한다.
+     *
+     * chatId(I3): 호출마다 새 v4()를 준다. anthropic.ts:591의 SSE resume은
+     * `arg.chatId && lastEventId`가 있어야 동작하는데, chatId가 없으면 이
+     * 포크의 12회 드롭 복구가 통째로 무력화된다. 채팅 하나가 최대 31회
+     * 순차 호출(666메시지 실측)이라 끊김 노출이 크다. 실제 채팅 chatId를
+     * 재사용하지 않는 이유: 그건 메시지 하나에 매핑되는 키인데, 이 추출은
+     * 청크/merge 호출마다 별개의 응답이라 하나로 묶으면 게이트웨이 로그에서
+     * 어느 호출의 로그인지 구분할 수 없다 — 매 호출 새 id가 맞다.
      */
     async function requestChat(prompt: string, sourceText: string): Promise<string>{
         const res = await requestChatData({
@@ -91,6 +111,8 @@
             bias: {},
             useStreaming: false,
             noMultiGen: true,
+            maxTokens: EXPORT_MAX_TOKENS,
+            chatId: v4(),
         }, 'model')
 
         if(res.type === 'success'){
