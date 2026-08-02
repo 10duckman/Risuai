@@ -54,6 +54,21 @@ function parseJson<T>(text: string): T | null{
 }
 
 /**
+ * 파싱 실패가 길이 상한 때문인지 짚는다.
+ *
+ * 잘린 JSON은 여는 괄호가 닫는 괄호보다 많다. 문법이 틀려서 깨진 것과 대처가
+ * 다르다 — 잘림은 maxTokens를 올리거나 구간을 줄여야 하고, 문법 오류는
+ * 프롬프트를 봐야 한다. 정확한 판정이 목적이 아니라 사용자에게 방향을
+ * 알려주는 것이 목적이므로 괄호 수만 센다. 문자열 안의 괄호까지 제외하려면
+ * 파서를 다시 쓰는 셈이고, 오판해도 결과는 "파싱 실패"로 같다.
+ */
+function looksTruncated(raw: string): boolean{
+    const open = (raw.match(/[{[]/g) ?? []).length
+    const close = (raw.match(/[}\]]/g) ?? []).length
+    return open > close
+}
+
+/**
  * 파싱된 청크 응답이 ChunkResult 모양인지 확인한다.
  *
  * JSON.parse는 성공하지만 `{"error":"..."}`나 `[]`처럼 스키마와 무관한
@@ -100,9 +115,11 @@ export async function runExport(opts: RunOptions): Promise<ExportPreview>{
 
         if(!parsed){
             // 청크 하나가 깨져도 전체를 포기하지 않는다.
+            // 잘림은 원인이 다르고 대처도 다르므로 구분해서 알린다 — 실측에서
+            // 10구간 중 하나가 maxTokens 상한에 닿아 문자열 중간에서 끊겼다.
             dropped.push({
                 what: `청크 ${chunk.startIndex}~${chunk.endIndex}`,
-                why: 'JSON 파싱 실패',
+                why: looksTruncated(raw) ? '응답이 중간에 끊김 (길이 상한)' : 'JSON 파싱 실패',
             })
         }
         else if(!isChunkResultShape(parsed)){

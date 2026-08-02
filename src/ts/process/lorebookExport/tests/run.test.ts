@@ -167,6 +167,40 @@ describe('runExport', () => {
         expect(preview.entries).toHaveLength(1)
     })
 
+    it('길이 상한에 잘린 응답은 파싱 실패와 구분해 알린다', async () => {
+        // 실측: 10구간 중 하나가 maxTokens 16,000에 닿아 문자열 중간에서
+        // 끊겼다 (Unterminated string at position 15905). 원인이 다르면 대처도
+        // 다르다 — 잘림은 상한을 올리거나 구간을 줄여야 한다.
+        const truncated = '{"people":[{"name":"만세","slots":{"Identity":[{"t":"num","v":"41세","src":"삐뚤빼'
+        let call = 0
+        const requestChat = vi.fn().mockImplementation(async (p: string) => {
+            if(p.includes('합친다')) return mergeResponse
+            call++
+            return call === 1 ? truncated : goodChunkResponse(0)
+        })
+
+        const preview = await runExport({ messages: messages(50), requestChat, targetTurns: 25 })
+
+        expect(preview.dropped.some(d => d.why.includes('중간에 끊김'))).toBe(true)
+        // 문법 오류로 오인하지 않는다.
+        expect(preview.dropped.some(d => d.why === 'JSON 파싱 실패')).toBe(false)
+    })
+
+    it('괄호가 닫힌 문법 오류는 잘림으로 오인하지 않는다', async () => {
+        // 여는 괄호와 닫는 괄호 수가 같으면 잘림이 아니다.
+        const malformed = '{"people": [,]}'
+        let call = 0
+        const requestChat = vi.fn().mockImplementation(async (p: string) => {
+            if(p.includes('합친다')) return mergeResponse
+            call++
+            return call === 1 ? malformed : goodChunkResponse(0)
+        })
+
+        const preview = await runExport({ messages: messages(50), requestChat, targetTurns: 25 })
+
+        expect(preview.dropped.some(d => d.why === 'JSON 파싱 실패')).toBe(true)
+    })
+
     it('코드블록으로 감싼 JSON을 파싱한다', async () => {
         const requestChat = vi.fn().mockImplementation(async (p: string) =>
             p.includes('합친다')
