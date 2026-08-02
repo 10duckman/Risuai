@@ -67,6 +67,11 @@ export async function runExport(opts: RunOptions): Promise<ExportPreview>{
     const collected: ChunkResult[] = []
     const dropped: DroppedItem[] = []
 
+    // 루프에 들어가기 전에 총 개수를 먼저 알린다. 청크 하나에 2~3분이 걸리므로
+    // (실측: 입력 6만 토큰, 출력 1만 토큰) 첫 응답을 기다리는 동안 진행 표시가
+    // "0/0"으로 남아 멈춘 것처럼 보인다.
+    opts.onProgress?.(0, chunks.length)
+
     for(let i = 0; i < chunks.length; i++){
         const chunk = chunks[i]
         const raw = await opts.requestChat(CHUNK_PROMPT, chunk.text)

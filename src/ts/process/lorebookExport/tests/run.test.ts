@@ -79,6 +79,32 @@ describe('runExport', () => {
         expect(onProgress).toHaveBeenCalledWith(3, 3)
     })
 
+    it('첫 청크를 기다리기 전에 총 개수를 먼저 알린다', async () => {
+        // 청크 하나에 2~3분이 걸린다. 루프 안에서만 알리면 그동안 진행 표시가
+        // "0/0"으로 남아 멈춘 것처럼 보인다.
+        const onProgress = vi.fn()
+        const requestChat = vi.fn().mockImplementation(async (p: string) => {
+            // 첫 호출 시점에 이미 총 개수가 전달돼 있어야 한다.
+            expect(onProgress).toHaveBeenCalledWith(0, 3)
+            return p.includes('합친다') ? mergeResponse : goodChunkResponse(0)
+        })
+
+        await runExport({ messages: messages(75), requestChat, onProgress, targetTurns: 25 })
+
+        expect(onProgress.mock.calls[0]).toEqual([0, 3])
+    })
+
+    it('청크가 없으면 onProgress를 부르지 않는다', async () => {
+        // (0, 0)이 가면 모달의 done === total 판정이 merging을 켜버린다.
+        const onProgress = vi.fn()
+        const requestChat = vi.fn()
+
+        await runExport({ messages: [], requestChat, onProgress })
+
+        expect(onProgress).not.toHaveBeenCalled()
+        expect(requestChat).not.toHaveBeenCalled()
+    })
+
     it('검증에서 걸러진 인물을 dropped에 담는다', async () => {
         const thinPerson = JSON.stringify({
             people: [{ name: '단역', slots: { Misc: [{ t: 'plain', v: '송진 냄새', src: '17년째 무직', msg: 0 }] } }],
