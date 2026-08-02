@@ -105,6 +105,39 @@ describe('runExport', () => {
         expect(requestChat).not.toHaveBeenCalled()
     })
 
+    it('중단하면 남은 청크를 호출하지 않는다', async () => {
+        // 긴 대화 하나가 Opus 5 호출 15회에 40분이다(실측). 멈출 수단이 없으면
+        // 모달을 닫아도 남은 호출이 그대로 나간다.
+        let cancelled = false
+        const requestChat = vi.fn().mockImplementation(async (p: string) => {
+            cancelled = true   // 첫 청크가 끝나자마자 중단
+            return p.includes('합친다') ? mergeResponse : goodChunkResponse(0)
+        })
+
+        const preview = await runExport({
+            messages: messages(75), requestChat, targetTurns: 25,
+            isCancelled: () => cancelled,
+        })
+
+        // 청크 3개짜리인데 1회만 호출됐다 — merge도 부르지 않는다.
+        expect(requestChat).toHaveBeenCalledTimes(1)
+        expect(preview.entries).toHaveLength(0)
+        expect(preview.dropped.some(d => d.why === '사용자가 중단')).toBe(true)
+    })
+
+    it('중단하지 않으면 끝까지 돈다', async () => {
+        const requestChat = vi.fn().mockImplementation(async (p: string) =>
+            p.includes('합친다') ? mergeResponse : goodChunkResponse(0))
+
+        await runExport({
+            messages: messages(75), requestChat, targetTurns: 25,
+            isCancelled: () => false,
+        })
+
+        // 청크 3회 + merge 1회
+        expect(requestChat).toHaveBeenCalledTimes(4)
+    })
+
     it('검증에서 걸러진 인물을 dropped에 담는다', async () => {
         const thinPerson = JSON.stringify({
             people: [{ name: '단역', slots: { Misc: [{ t: 'plain', v: '송진 냄새', src: '17년째 무직', msg: 0 }] } }],

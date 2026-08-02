@@ -1442,6 +1442,8 @@ export const languageKorean = {
     "lorebookExport": "로어북으로 추출",
     "lorebookExportRunning": (done:number, total:number) => `추출 중... (${done}/${total} 구간)`,
     "lorebookExportMerging": "통합 중...",
+    "lorebookExportCancel": "중단",
+    "lorebookExportCancelling": "현재 구간을 마치는 중...",
     "lorebookExportEmpty": "추출할 내용이 없습니다.",
     "lorebookExportDropped": "제외된 항목",
     "lorebookExportToGlobal": "캐릭터 로어북",

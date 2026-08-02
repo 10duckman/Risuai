@@ -21,6 +21,17 @@ export interface RunOptions{
     requestChat: RequestChatFn
     onProgress?: (done: number, total: number) => void
     targetTurns?: number
+    /**
+     * true를 돌려주면 다음 청크를 시작하지 않고 지금까지 모은 것으로 끝낸다.
+     *
+     * 실측으로 필요해졌다: 긴 대화 하나가 15청크 × Opus 5 호출이고 40분,
+     * 입력 100만 토큰 규모다. 모달을 닫아도 이 루프는 계속 돌아 남은 호출이
+     * 그대로 나갔다 — 사용자가 멈출 방법이 없었다.
+     *
+     * 이미 보낸 요청은 취소하지 않는다(게이트웨이가 응답을 기록해야 한다).
+     * 다음 요청을 보내지 않는 것까지가 이 신호의 범위다.
+     */
+    isCancelled?: () => boolean
 }
 
 /**
@@ -72,7 +83,17 @@ export async function runExport(opts: RunOptions): Promise<ExportPreview>{
     // "0/0"으로 남아 멈춘 것처럼 보인다.
     opts.onProgress?.(0, chunks.length)
 
+    let cancelled = false
     for(let i = 0; i < chunks.length; i++){
+        if(opts.isCancelled?.()){
+            // 지금까지 모은 것으로 끝낸다. 이미 쓴 호출을 버리지 않는다.
+            cancelled = true
+            dropped.push({
+                what: `청크 ${i + 1}~${chunks.length}`,
+                why: '사용자가 중단',
+            })
+            break
+        }
         const chunk = chunks[i]
         const raw = await opts.requestChat(CHUNK_PROMPT, chunk.text)
         const parsed = parseJson<ChunkResult>(raw)
@@ -102,7 +123,10 @@ export async function runExport(opts: RunOptions): Promise<ExportPreview>{
 
     // 살아남은 청크가 하나도 없으면 merge를 부를 이유가 없다 — 합칠 재료가
     // 없는데 모델 호출 하나를 더 쓰고, 그 응답을 무조건 신뢰하게 된다.
-    if(collected.length === 0){
+    //
+    // 중단했을 때도 merge를 부르지 않는다. 중단은 "호출을 더 쓰지 말라"는
+    // 뜻이고, merge는 입력이 가장 큰 호출이다 (청크 결과 전체가 입력).
+    if(collected.length === 0 || cancelled){
         return buildPreview({ entries: [], dropped })
     }
 

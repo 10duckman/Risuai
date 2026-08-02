@@ -34,6 +34,13 @@
     let merging = $state(false)
     let preview: ExportPreview | null = $state(null)
     let recentTurns = $state(0)
+    /**
+     * 중단 요청. 이미 보낸 요청은 취소하지 않고, 다음 청크를 시작하지 않는다.
+     *
+     * 긴 대화 하나가 Opus 5 호출 15회에 40분, 입력 100만 토큰 규모다(실측).
+     * 이 신호가 없으면 모달을 닫아도 남은 호출이 그대로 나간다.
+     */
+    let cancelled = $state(false)
 
     // 모달을 열 때의 신원을 고정한다. 추출은 수 분이 걸리고 그 사이 채팅이
     // 삭제되면 인덱스가 앞으로 밀린다 (SideChatList/ChatList의 splice) —
@@ -132,6 +139,7 @@
         stage = 'running'
         progress = { done: 0, total: 0 }
         merging = false
+        cancelled = false
         try{
             const result = await runExport({
                 messages: collectMessages(recentTurns),
@@ -142,6 +150,7 @@
                         merging = true
                     }
                 },
+                isCancelled: () => cancelled,
             })
             preview = result
             stage = 'preview'
@@ -201,7 +210,7 @@
     <div class="bg-darkbg rounded-md p-4 w-3xl max-w-full max-h-[85vh] flex flex-col">
         <div class="flex items-center mb-4">
             <h1 class="text-xl font-bold flex-1">{language.lorebookExport}</h1>
-            <button onclick={onClose} class="text-textcolor2 hover:text-textcolor">
+            <button onclick={() => { cancelled = true; onClose() }} class="text-textcolor2 hover:text-textcolor">
                 <XIcon size={20} />
             </button>
         </div>
@@ -225,6 +234,12 @@
             <span class="text-textcolor2">
                 {merging ? language.lorebookExportMerging : language.lorebookExportRunning(progress.done, progress.total)}
             </span>
+            <!-- 구간당 1~3분이고 전체가 40분까지 간다. 멈출 수단이 필요하다. -->
+            <button class="border-darkborderc border py-2 px-4 rounded-md hover:ring-2 mt-4 text-textcolor2"
+                disabled={cancelled}
+                onclick={() => { cancelled = true }}>
+                {cancelled ? language.lorebookExportCancelling : language.lorebookExportCancel}
+            </button>
 
         {:else if stage === 'preview' && preview}
             {#if preview.entries.length === 0}
