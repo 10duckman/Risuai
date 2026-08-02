@@ -25,17 +25,25 @@ export const INSERT_ORDER: Record<EntryCategory, number> = {
  *
  * 실측: merge가 category를 아예 빼먹은 응답을 냈다 (14개 항목 전부 undefined).
  * 그러면 INSERT_ORDER[undefined]가 undefined가 되어 로어북에 undefined
- * insertorder가 저장되고, defaultDestination도 전부 local로 떨어진다
- * (장소는 global이 맞다). UI의 분류 라벨도 undefined로 렌더된다.
+ * insertorder가 저장되고, defaultDestination도 전부 local로 떨어지고, UI의
+ * 분류 라벨도 undefined로 렌더된다.
  *
- * 폴백을 object로 두는 이유: 넷 중 유일하게 always-on이 아니다. 정체를 모르는
- * 항목을 매 턴 주입하는 것보다 키워드로 두는 쪽이 안전하다.
+ * category가 없을 때 `alwaysActive`로 추론한다. 같은 실측에서 merge는
+ * category를 빼먹었어도 alwaysActive는 스펙대로 넣었다 — 장소인 "붉은 방"과
+ * "여의도 아파트"는 true, 사물인 "까르띠에 러브링"과 "딸기우유"는 false였다.
+ * 스펙이 always-on으로 규정한 것은 인물·장소·관계 상태이고 키워드로 규정한
+ * 것은 사물뿐이므로, alwaysActive는 "사물이 아니다"를 가리키는 신호가 된다.
+ *
+ * always-on이면 place로 본다. 인물이었다면 그게 더 정확하겠지만 구별할 단서가
+ * 없고, place는 person과 같은 global 목적지에 insertorder만 10 낮다 — 인물을
+ * place로 잘못 놓는 비용이 장소를 object로 놓는 비용(insertorder 50 + 채팅
+ * 로어북)보다 작다. always-on이 아니면 object다.
  */
-export function normalizeCategory(value: unknown): EntryCategory{
-    return value === 'person' || value === 'place'
-        || value === 'state' || value === 'object'
-        ? value
-        : 'object'
+export function normalizeCategory(value: unknown, alwaysActive?: boolean): EntryCategory{
+    if(value === 'person' || value === 'place' || value === 'state' || value === 'object'){
+        return value
+    }
+    return alwaysActive ? 'place' : 'object'
 }
 
 /**
@@ -49,7 +57,7 @@ export function toLoreBook(entry: MergedEntry): LoreBookEntry{
     return {
         key: entry.key,
         secondkey: entry.secondkey,
-        insertorder: INSERT_ORDER[normalizeCategory(entry.category)],
+        insertorder: INSERT_ORDER[normalizeCategory(entry.category, entry.alwaysActive)],
         comment: entry.comment,
         content: entry.content,
         mode: entry.mode,
@@ -74,7 +82,7 @@ export function buildPreview(merge: MergeResult): ExportPreview{
     // category를 여기서 한 번 정규화한다 — 미리보기와 toLoreBook이 모두 이
     // 결과를 쓰므로, 쓰레기 값이 insertorder와 목적지로 새어나가는 경로를
     // 한 곳에서 막는다.
-    const entries = merge.entries.map(e => ({ ...e, category: normalizeCategory(e.category) }))
+    const entries = merge.entries.map(e => ({ ...e, category: normalizeCategory(e.category, e.alwaysActive) }))
     const budget = checkAlwaysOnBudget(entries)
     return {
         entries,

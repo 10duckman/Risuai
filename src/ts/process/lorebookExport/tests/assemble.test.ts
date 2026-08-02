@@ -141,12 +141,33 @@ describe('buildPreview', () => {
         expect(preview.alwaysOnOverflow).toBe(false)
     })
 
-    it('category가 없으면 object로 정규화한다', () => {
-        // 실측: merge가 category를 아예 빼먹은 응답을 냈다 (14개 전부 undefined).
-        // 그대로 두면 INSERT_ORDER[undefined]가 undefined가 되어 로어북에
-        // undefined insertorder가 저장된다.
+    it('category가 없고 always-on이면 place로 본다', () => {
+        // 실측: merge가 category를 빼먹은 응답을 냈다 (14개 전부 undefined).
+        // 그런데 alwaysActive는 스펙대로 넣었다 — 장소인 "붉은 방"과 "여의도
+        // 아파트"는 true였다. 폴백을 object로 두면 그 둘이 insertorder 50에
+        // 채팅 로어북으로 가서 스펙(장소 = 90, 캐릭터 로어북)을 어긴다.
         const preview = buildPreview({
-            entries: [entry({ category: undefined as unknown as MergedEntry['category'] })],
+            entries: [entry({
+                comment: '붉은 방',
+                category: undefined as unknown as MergedEntry['category'],
+                alwaysActive: true,
+            })],
+            dropped: [],
+        })
+
+        expect(preview.entries[0].category).toBe('place')
+        expect(toLoreBook(preview.entries[0]).insertorder).toBe(INSERT_ORDER.place)
+        expect(preview.destinations[0]).toBe('global')
+    })
+
+    it('category가 없고 always-on이 아니면 object로 본다', () => {
+        // 같은 실측에서 사물("까르띠에 러브링", "딸기우유")은 alwaysActive: false였다.
+        const preview = buildPreview({
+            entries: [entry({
+                comment: '까르띠에 러브링',
+                category: undefined as unknown as MergedEntry['category'],
+                alwaysActive: false,
+            })],
             dropped: [],
         })
 
@@ -155,9 +176,12 @@ describe('buildPreview', () => {
         expect(preview.destinations[0]).toBe('local')
     })
 
-    it('알 수 없는 category도 object로 정규화한다', () => {
+    it('알 수 없는 category도 같은 규칙으로 정규화한다', () => {
         const preview = buildPreview({
-            entries: [entry({ category: 'protagonist' as unknown as MergedEntry['category'] })],
+            entries: [entry({
+                category: 'protagonist' as unknown as MergedEntry['category'],
+                alwaysActive: false,
+            })],
             dropped: [],
         })
 
@@ -177,9 +201,35 @@ describe('buildPreview', () => {
 
     it('toLoreBook 단독 호출에서도 쓰레기 category가 새지 않는다', () => {
         // buildPreview를 거치지 않는 경로가 생겨도 undefined insertorder는 막는다.
-        const lb = toLoreBook(entry({ category: undefined as unknown as MergedEntry['category'] }))
+        const lb = toLoreBook(entry({
+            category: undefined as unknown as MergedEntry['category'],
+            alwaysActive: false,
+        }))
 
         expect(lb.insertorder).toBe(INSERT_ORDER.object)
         expect(lb.insertorder).not.toBeUndefined()
+    })
+
+    it('실측 응답 14개의 alwaysActive 분포를 그대로 통과시킨다', () => {
+        // 화면에서 확인한 실제 값: 앞의 두 개(장소)만 상시 활성이었다.
+        const observed = [
+            { comment: '붉은 방 → 웬디스 버거 여의도 지점', alwaysActive: true },
+            { comment: '여의도 고층 아파트 (집)', alwaysActive: true },
+            { comment: '청담동 레스토랑 / 호텔 스위트', alwaysActive: false },
+            { comment: '까르띠에 러브링 (반지)', alwaysActive: false },
+            { comment: '딸기우유', alwaysActive: false },
+        ]
+        const preview = buildPreview({
+            entries: observed.map(o => entry({
+                ...o,
+                category: undefined as unknown as MergedEntry['category'],
+            })),
+            dropped: [],
+        })
+
+        expect(preview.entries.map(e => e.category))
+            .toEqual(['place', 'place', 'object', 'object', 'object'])
+        expect(preview.destinations)
+            .toEqual(['global', 'global', 'local', 'local', 'local'])
     })
 })
