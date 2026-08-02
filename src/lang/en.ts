@@ -1571,6 +1571,7 @@ export const languageEnglish = {
     lorebookExport: "Export to Lorebook",
     lorebookExportRunning: (done:number, total:number) => `Extracting... (${done}/${total} chunks)`,
     lorebookExportMerging: "Merging...",
+    lorebookExportEstimate: (chunks:number) => `${chunks} chunks, about ${chunks < 2 ? 2 : chunks * 2} min`,
     lorebookExportCancel: "Stop",
     lorebookExportCancelling: "Finishing the current chunk...",
     lorebookExportEmpty: "Nothing to extract.",

@@ -5,7 +5,7 @@
     import { runExport } from 'src/ts/process/lorebookExport/run'
     import { toLoreBook } from 'src/ts/process/lorebookExport/assemble'
     import { ALWAYS_ON_LIMIT } from 'src/ts/process/lorebookExport/validate'
-    import type { ChunkMessage } from 'src/ts/process/lorebookExport/chunking'
+    import { splitIntoChunks, type ChunkMessage } from 'src/ts/process/lorebookExport/chunking'
     import type { EntryDestination, ExportPreview } from 'src/ts/process/lorebookExport/types'
     import { DBState } from 'src/ts/stores.svelte'
     import { XIcon } from '@lucide/svelte'
@@ -56,6 +56,17 @@
 
     const chat = $derived(DBState.db.characters[charIndex].chats[chatIndex])
     const totalMessages = $derived(chat.message.length)
+
+    /**
+     * 그 범위가 구간 몇 개인지 미리 계산한다.
+     *
+     * 추정하지 않고 실제 분할기를 돌린다 — 청크 경계는 턴 수(25)와 문자
+     * 수(60,000) 둘 중 먼저 걸리는 쪽이라 메시지 수만으로는 알 수 없다.
+     * 실측: 구간당 Opus 5 호출 1회, 1~3분, 입력 5~6만 토큰.
+     */
+    function chunkCount(limit: number): number{
+        return splitIntoChunks(collectMessages(limit)).length
+    }
 
     /** 대화를 ChunkMessage로 옮긴다. 빈 메시지도 인덱스를 유지한다. */
     function collectMessages(limit: number): ChunkMessage[]{
@@ -220,12 +231,14 @@
             <button class="border-darkborderc border py-2 px-4 rounded-md hover:ring-2 mt-2 text-left"
                 onclick={() => { recentTurns = 0; start() }}>
                 {language.lorebookExportRangeAll} ({totalMessages})
+                <span class="text-textcolor2 text-sm">— {language.lorebookExportEstimate(chunkCount(0))}</span>
             </button>
             {#each [30, 50, 100] as n}
                 {#if n < totalMessages}
                     <button class="border-darkborderc border py-2 px-4 rounded-md hover:ring-2 mt-2 text-left"
                         onclick={() => { recentTurns = n; start() }}>
                         {language.lorebookExportRangeRecent(n)}
+                        <span class="text-textcolor2 text-sm">— {language.lorebookExportEstimate(chunkCount(n))}</span>
                     </button>
                 {/if}
             {/each}
