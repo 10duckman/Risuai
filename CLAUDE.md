@@ -13,10 +13,17 @@
 - 요청/응답 로깅 (`GATEWAY_LOG=true`, `save/gateway-logs/`)
 - `responseLength`를 `message_delta` SSE 이벤트에 포함
 
-### 스트리밍 에러 복구 (`index.svelte.ts`)
+### 스트리밍 에러 복구 — 수동 동기화 (`index.svelte.ts`, `Chat.svelte`)
 - 스트리밍 루프 try-catch + isStreaming 상태 보장 (finally)
 - 빈 응답 / 잘린 응답 감지 (`expectedLength` 비교)
-- 실패 시 `/gateway/recover`로 자동 복구, 복구 불가 시 빈 메시지 삭제 + 에러 표시
+- **자동 복구는 없다.** 실패 시 부분 메시지(빈 것이라도)를 남기고 에러만 표시한다 —
+  메시지를 지우면 `chatId`가 사라지고, `chatId`는 `/gateway/recover`의 유일한 조회 키다
+- 복구는 사용자가 메시지 메뉴의 "서버에서 동기화"를 눌러서 한다 (단발 조회, 폴링 없음).
+  이유: 자동 복구를 4겹까지 쌓아도 리로드로 JS 컨텍스트가 죽으면 전부 함께 사라졌다.
+  로그 조사 결과 1,564건 중 1,540건(98.5%)이 서버에 온전히 남아 있었다 — 응답이 없는 게
+  아니라 복구 시점을 코드가 잘못 추측하는 것이 문제였다
+- 전송 계층 재시도는 유지: SSE resume(12회), 10초 하트비트, 25초 idle 타임아웃
+- 설계/계획: `docs/superpowers/specs/2026-07-30-manual-message-sync-design.md`
 
 ### Bedrock gateway 모드 (`anthropic.ts`)
 - 게이트웨이 경유 Bedrock 요청 지원

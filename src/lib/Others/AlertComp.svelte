@@ -709,6 +709,19 @@
                     <button class="border-darkborderc border py-2 px-8 flex rounded-md hover:ring-2 items-center mt-2" onclick={() => {
                         alertStore.set({
                             type: 'none',
+                            msg: '3'
+                        })
+                    }}>
+                        <div class="flex flex-col justify-start items-start">
+                            <span>{language.lorebookExport}</span>
+                        </div>
+                        <div class="ml-9 float-right flex-1 flex justify-end">
+                            <ChevronRightIcon />
+                        </div>
+                    </button>
+                    <button class="border-darkborderc border py-2 px-8 flex rounded-md hover:ring-2 items-center mt-2" onclick={() => {
+                        alertStore.set({
+                            type: 'none',
                             msg: 'cancel'
                         })
                     }}>

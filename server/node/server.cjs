@@ -1234,6 +1234,11 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
     // every attached resume-client, not just this connection).
     let streamEntry = null;
     let emitEvent = null;
+    // responseText/writeResLog/resLogWritten도 hoist — catch 블록에서 부분
+    // 응답이라도 res.json에 남기려면 try 안 선언으로는 접근할 수 없다.
+    let responseText = '';
+    let writeResLog = null;
+    let resLogWritten = false;
 
     try {
         const { modelId, messages, system, inferenceConfig, bearerToken: clientBearerToken, thinking: thinkingConfig, thinkingEffort } = req.body;
@@ -1285,7 +1290,21 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             console.log(`[Gateway] Log: ${logId}`, JSON.stringify(reqLog));
         }
 
-        const cacheTtl = req.headers['x-cache-ttl'] || '5m';
+        // res.json 저장. 여러 지점에서 부를 수 있게 분리한다 — metadata
+        // 이벤트가 오지 않고 스트림이 끝나는 경우가 실제로 있어서(조사 결과
+        // 1,564건 중 24건), 그때도 영구 기록을 남겨야 한다. 메모리 버퍼는
+        // 30분 뒤 만료되므로 파일이 없으면 응답이 완전히 사라진다.
+        writeResLog = (usage, text) => {
+            if (!gatewayLog || !logId || !text) {
+                return;
+            }
+            resLogWritten = true;
+            const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
+            fs.writeFile(
+                path.join(logDir, `${logId}_res.json`),
+                JSON.stringify({ usage: usage || null, responseText: text, chatId, timestamp: new Date().toISOString() }, null, 2)
+            ).catch(() => {});
+        };
 
         // Trim trailing whitespace from assistant messages (Bedrock rejects it)
         if (messages) {
@@ -1303,7 +1322,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         const commandParams = {
             modelId,
             messages,
-            system: system ? [{ text: system }, { cachePoint: { type: "default", ttl: cacheTtl } }] : undefined,
+            system: system ? [{ text: system }] : undefined,
             inferenceConfig,
         };
 
@@ -1450,7 +1469,7 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         const response = await client.send(command);
 
         let thinking = false;
-        let responseText = '';
+        responseText = '';
         for await (const event of response.stream) {
             if (event.contentBlockStart) {
                 const block = event.contentBlockStart.start;
@@ -1489,16 +1508,19 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
             } else if (event.metadata) {
                 const usage = event.metadata.usage;
                 console.log(`[Gateway] Usage: input=${usage?.inputTokens} output=${usage?.outputTokens} cacheRead=${usage?.cacheReadInputTokens || 0} cacheWrite=${usage?.cacheWriteInputTokens || 0}`);
-                if (gatewayLog && logId) {
-                    const logDir = path.join(process.cwd(), 'save', 'gateway-logs');
-                    fs.writeFile(path.join(logDir, `${logId}_res.json`), JSON.stringify({ usage, responseText, chatId, timestamp: new Date().toISOString() }, null, 2)).catch(() => {});
-                }
+                writeResLog(usage, responseText);
                 emitEvent(`data: ${JSON.stringify({
                     type: 'message_delta',
                     usage: usage,
                     responseLength: responseText.length
                 })}\n\n`);
             }
+        }
+
+        // metadata 없이 스트림이 끝났다면 여기서 남긴다.
+        if (!resLogWritten) {
+            console.warn(`[Gateway] Stream ended without metadata (chatId=${chatId}, ${responseText.length} chars) — writing res log anyway`);
+            writeResLog(null, responseText);
         }
 
         // Send explicit stream completion marker before ending
@@ -1524,6 +1546,10 @@ app.post('/gateway/bedrock-stream', async (req, res) => {
         if (!clientDisconnected && !res.writableEnded) res.end();
     } catch (err) {
         console.error(`[Gateway] Bedrock error:`, err.message || err);
+        // 부분 텍스트라도 남긴다 — 아무것도 없는 것보다 낫다.
+        if (typeof writeResLog === 'function' && !resLogWritten) {
+            try { writeResLog(null, responseText); } catch (e) {}
+        }
         // If headers already sent, broadcast the error so any attached client
         // (and any future resumer) sees it instead of timing out.
         if (res.headersSent) {

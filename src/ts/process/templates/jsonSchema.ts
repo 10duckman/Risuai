@@ -1,6 +1,6 @@
 import { risuChatParser } from "src/ts/parser/parser.svelte"
 import { getDatabase } from "src/ts/storage/database.svelte"
-import { jsonOutputTrimmer } from "src/ts/util"
+import { jsonOutputTrimmer } from "src/ts/util/jsonOutputTrimmer"
 
 export function convertInterfaceToSchema(int:string){
     if(!int.startsWith('interface ') && !int.startsWith('export interface ')){

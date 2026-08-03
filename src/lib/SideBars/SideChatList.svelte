@@ -20,6 +20,7 @@
     import { language } from "src/lang";
     import Toggles from "./Toggles.svelte";
     import { changeChatTo, createChatCopyName } from "src/ts/globalApi.svelte";
+    import LorebookExportModal from "src/lib/Others/LorebookExportModal.svelte";
 
     interface Props {
         chara: character|groupChat;
@@ -27,6 +28,7 @@
 
     let { chara = $bindable() }: Props = $props();
     let editMode = $state(false)
+    let exportTarget: { charIndex: number, chatIndex: number } | null = $state(null)
 
     let chatsStb: Sortable[] = []
     let folderStb: Sortable = null
@@ -296,6 +298,14 @@
                                     case 2:{
                                         changeChatTo(chara.chats.indexOf(chat))
                                         createMultiuserRoom()
+                                        break
+                                    }
+                                    case 3:{
+                                        exportTarget = {
+                                            charIndex: $selectedCharID,
+                                            chatIndex: chara.chats.indexOf(chat),
+                                        }
+                                        break
                                     }
                                 }
                             }}>
@@ -408,6 +418,11 @@
                             case 2:{
                                 changeChatTo(i)
                                 createMultiuserRoom()
+                                break
+                            }
+                            case 3:{
+                                exportTarget = { charIndex: $selectedCharID, chatIndex: i }
+                                break
                             }
                         }
                     }}>
@@ -519,3 +534,11 @@
     </div>
     {/if}
 </div>
+
+{#if exportTarget}
+    <LorebookExportModal
+        charIndex={exportTarget.charIndex}
+        chatIndex={exportTarget.chatIndex}
+        onClose={() => { exportTarget = null }}
+    />
+{/if}
